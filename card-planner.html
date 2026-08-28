@@ -654,6 +654,15 @@
     <div class="grace-switch"></div>
   </div>
 
+  <!-- 危险模式开关 -->
+  <div class="grace-toggle" id="dangerToggle" style="margin-top: 10px;">
+    <div class="grace-info">
+      <span class="grace-title" style="color: #d97706;">⚠ 危险模式 · 6 小时静置</span>
+      <span class="grace-desc">默认还款后需静置 24h 才能再取现；开启后静置缩短到 6h，资金周转更快但风控风险明显上升。仅在现金极度紧张、短时间内必须连环周转时临时使用。</span>
+    </div>
+    <div class="grace-switch"></div>
+  </div>
+
   <!-- 生成按钮 -->
   <button class="primary-btn" id="generateBtn">生成还款计划</button>
 
@@ -687,7 +696,7 @@
       <div class="rule-group-title">🔒 强制规则 · 已写入算法</div>
       <div class="rule-item"><span class="rule-num">07</span><div><span class="rule-tag">时间窗</span><b>刷卡时间 9:00-22:00</b>。凌晨/深夜大额（如凌晨刷珠宝店）必触反洗钱监测；餐饮类只在午晚高峰。算法已把所有取现任务塞进 9-22 点窗口。</div></div>
       <div class="rule-item"><span class="rule-num">08</span><div><span class="rule-tag">频次</span><b>单日单卡 ≤2 次</b>，间隔 30 分钟以上；第 3 次切第二渠道分散终端编号，避免"一机多刷"识别。</div></div>
-      <div class="rule-item"><span class="rule-num">02</span><div><span class="rule-tag">静置</span><b>还款后静置 ≥24h 再取现</b>。2026 AI 风控盯"驻留时间"，还款 1 小时内全额刷空 = 二级风控，连续 2 次可能冻结；最稳 24-48h。</div></div>
+      <div class="rule-item"><span class="rule-num">02</span><div><span class="rule-tag">静置</span><b>还款后静置 ≥24h 再取现</b>。2026 AI 风控盯"驻留时间"，还款 1 小时内全额刷空 = 二级风控，连续 2 次可能冻结；最稳 24-48h。⚠ <b>危险模式</b>可临时降到 6h，仅限极端资金链濒临断裂时应急，用完尽快关回。</div></div>
       <div class="rule-item"><span class="rule-num">11</span><div><span class="rule-tag s">错峰</span><b>多卡账单日错峰</b>：2 卡间隔 15 天 / 3 卡 10 天 / 4 卡 7-8 天，推荐 5/15/25 日。配合"账单日次日刷"可让一组还款时另一组刚出账单尚在免息期，循环次数从 12 次/年降到 8 次/年，10 万账单省约 2400 元磨损。</div></div>
       <div class="rule-item"><span class="rule-num">12</span><div><span class="rule-tag s">免息</span><b>大额放账单日次日</b>。账单日当天消费免息期最短（≈20 天），次日消费最长 50-56 天；隔日刷省一月息。</div></div>
     </div>
@@ -747,7 +756,8 @@
     plan: null, // {schedule, totalCost, finalCash, byMonth}
     activeMonth: null,
     staggerDiag: null,
-    enableGrace: false,  // 启用银行容时宽限期（顺延 3 天）
+    enableGrace: false,     // 启用银行容时宽限期（顺延 3 天）
+    dangerMode: false,      // 危险模式：静置期从 24h 降到 6h，加快资金周转
   };
 
   function load() {
@@ -758,6 +768,7 @@
         state.cash = data.cash || 0;
         state.cards = (data.cards || []).map(migrateCard);
         state.enableGrace = !!data.enableGrace;
+        state.dangerMode = !!data.dangerMode;
       }
     } catch(e) {}
     if (state.cards.length === 0) {
@@ -785,7 +796,7 @@
   }
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      cash: state.cash, cards: state.cards, enableGrace: state.enableGrace,
+      cash: state.cash, cards: state.cards, enableGrace: state.enableGrace, dangerMode: state.dangerMode,
     }));
   }
   function uid() { return 'c' + Math.random().toString(36).slice(2, 9); }
@@ -824,8 +835,13 @@
   const WINDOW_END = 22;             // 取现时间窗终点（含）
   const GRACE_DAYS = 3;              // 银行容时宽限期天数
 
-  function generatePlan(cards, cashX, today, enableGrace) {
-    const horizon = addMonths(today, MONTHS_HORIZON);
+  function generatePlan(cards, cashX, today, enableGrace, dangerMode) {
+    // 关键：today 必须归零到午夜再比较 dueDay，否则 due=午夜 0点 < today=晚上20点
+    // 会把 dueDay 等于今天的还款日误判为已过期而跳过！
+    const tMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const horizon = addMonths(tMid, MONTHS_HORIZON);
+    // 危险模式：静置期 24h → 6h，放宽风控约束
+    const silence = dangerMode ? 6 : silence;
     // 1. 枚举所有还款任务
     const tasks = [];
     const initBill = {};
@@ -835,12 +851,11 @@
       initBill[c.id] = Math.max(0, fb);
     });
     cards.forEach(c => {
-      // 修正：宽限期不能累积进 addMonths，每月独立计算 dueDay + 宽限
-      let year = today.getFullYear();
-      let month = today.getMonth();
-      // 找到起始月的 dueDay
+      // 每月独立计算 dueDay + 宽限，宽限期不累积
+      let year = tMid.getFullYear();
+      let month = tMid.getMonth();
       let due = new Date(year, month, c.dueDay);
-      if (due < today) {
+      if (due < tMid) {
         month++;
         if (month > 11) { month = 0; year++; }
         due = new Date(year, month, c.dueDay);
@@ -942,7 +957,7 @@
           wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
           wDate.setHours(10, 0, 0, 0);
           if (src.lastRepay) {
-            const earliest = new Date(src.lastRepay.getTime() + SILENCE_HOURS * 3600 * 1000);
+            const earliest = new Date(src.lastRepay.getTime() + silence * 3600 * 1000);
             if (wDate < earliest) wDate = new Date(earliest);
           }
         }
@@ -957,7 +972,7 @@
         totalCost += take * FEE_RATE;
         dailyCount[wKey] = cnt + 1;
 
-        const tag = src.isSelf ? '自取现' : ('渠道' + channel + ' · 静置' + SILENCE_HOURS + 'h');
+        const tag = src.isSelf ? '自取现' : ('渠道' + channel + ' · 静置' + silence + 'h');
         withdrawals.push({
           date: wDate, action: 'withdraw', cardId: src.card.id,
           cardName: src.card.name, amount: take,
@@ -1127,34 +1142,26 @@
     summaryWrap.style.display = 'block';
     const { totalCost, totalWithdraw, savedByCash, finalCash, byMonth, schedule, riskCount } = state.plan;
 
-    // 宽限期引导提示
-    const graceHint = document.getElementById('graceHint');
-    if (graceHint) graceHint.remove(); // 先清除
-    if (riskCount > 0) {
-      const hint = document.createElement('div');
-      hint.id = 'graceHint';
-      hint.style.cssText = 'margin-bottom: 12px; background: var(--warn-soft); border: 1px solid #f0d48a; border-radius: var(--radius-lg); padding: 14px 16px; display: flex; align-items: center; gap: 12px;';
-      const savedCount = state.plan.hasGraceAlternative ? state.plan.graceSavedRisk : 0;
-      hint.innerHTML = `
-        <div style="flex:1;">
-          <div style="font-size: 14px; font-weight: 600; color: var(--warn); margin-bottom: 4px;">⚠ 资金缺口 ${riskCount} 笔，可能逾期！</div>
-          <div style="font-size: 12px; color: var(--text-2); line-height: 1.6;">
-            ${savedCount > 0 ? `开启银行 3 天宽限期可减少 <b>${savedCount}</b> 笔缺口。` : `当前资金链完全断裂，建议开启银行 3 天宽限期争取周转时间。`}
-            工行/招行/建行等多数银行默认自动给予 3 天容时，无需申请。
-          </div>
-        </div>
-        <button id="graceApplyBtn" style="flex-shrink:0; background: var(--warn); color:#fff; border:none; border-radius: var(--radius); padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;">一键开启</button>
-      `;
-      summaryWrap.insertBefore(hint, summaryWrap.firstChild);
-      document.getElementById('graceApplyBtn').addEventListener('click', () => {
-        state.enableGrace = true;
-        save();
-        document.getElementById('graceToggle').classList.add('checked');
-        state.plan = generatePlan(state.cards, state.cash, new Date(), true);
-        state.activeMonth = null;
-        renderPlan();
-      });
+    // 自动循环取现补足 — 不推"补资金"，只展示状态说明条
+    const tip = document.getElementById('autoLoopTip');
+    if (tip) tip.remove();
+    const tipBar = document.createElement('div');
+    tipBar.id = 'autoLoopTip';
+    const loopOk = riskCount === 0;
+    const silenceLabel = state.dangerMode ? '6h' : '24h';
+    tipBar.style.cssText = 'margin-bottom: 12px; border-radius: var(--radius-lg); padding: 12px 16px; font-size: 13px; line-height: 1.7;';
+    if (loopOk) {
+      tipBar.style.background = 'var(--success-soft, #effaf3)';
+      tipBar.style.border = '1px solid #bfe3cc';
+      tipBar.style.color = 'var(--success, #2e7d55)';
+      tipBar.innerHTML = `✅ 循环取现已全额覆盖所有账单（源卡静置 ${silenceLabel}）。本次现金直接还贷 <b>${fmtMoney(savedByCash / 0.00056)}</b> 省磨损，其余由卡间循环。`;
+    } else {
+      tipBar.style.background = '#fff7ed';
+      tipBar.style.border = '1px solid #fed7aa';
+      tipBar.style.color = '#c2410c';
+      tipBar.innerHTML = `⚠ 循环取现仍有 <b>${riskCount} 笔</b> 无法覆盖（源卡可用额度耗尽或静置冲突）。可尝试开启 <b>危险模式</b>（静置 6h）或 <b>3 天宽限期</b> 再生成一次。`;
     }
+    summaryWrap.insertBefore(tipBar, summaryWrap.firstChild);
 
     // 汇总
     const coverCount = new Set(schedule.map(t => t.cardId)).size;
@@ -1178,8 +1185,8 @@
         <span class="summary-value" style="color: var(--success);">${fmtMoney(savedByCash)}</span>
       </div>
       <div class="summary-item" style="grid-column: span 2;">
-        <span class="summary-label">${riskCount > 0 ? '资金缺口' : '剩余本金'}</span>
-        <span class="summary-value ${riskCount > 0 ? 'risk' : ''}">${riskCount > 0 ? riskCount + ' 笔待补' : fmtMoney(finalCash)}</span>
+        <span class="summary-label">剩余现金</span>
+        <span class="summary-value">${fmtMoney(finalCash)}</span>
       </div>
       <div class="summary-item" style="grid-column: span 2;">
         <span class="summary-label">覆盖卡数</span>
@@ -1452,16 +1459,9 @@
   document.getElementById('generateBtn').addEventListener('click', () => {
     if (!state.cards.length) { alert('请先添加信用卡'); return; }
     if (state.cash < 0) state.cash = 0;
-    state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace);
+    state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace, state.dangerMode);
     state.activeMonth = null;
     renderPlan();
-    // 如果有风险且没开宽限期，自动尝试用宽限期再算一次，对比展示
-    if (state.plan.riskCount > 0 && !state.enableGrace) {
-      const gracePlan = generatePlan(state.cards, state.cash, new Date(), true);
-      state.plan.hasGraceAlternative = gracePlan.riskCount < state.plan.riskCount;
-      state.plan.graceSavedRisk = state.plan.riskCount - gracePlan.riskCount;
-      state.plan.graceAlternative = gracePlan;
-    }
     document.getElementById('summaryWrap').scrollIntoView({ behavior: 'smooth' });
   });
   // 宽限期开关
@@ -1469,9 +1469,19 @@
     state.enableGrace = !state.enableGrace;
     save();
     document.getElementById('graceToggle').classList.toggle('checked', state.enableGrace);
-    // 如果已有计划，重新生成
-    if (state.cards.length && state.cash > 0) {
-      state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace);
+    if (state.cards.length) {
+      state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace, state.dangerMode);
+      state.activeMonth = null;
+      renderPlan();
+    }
+  });
+  // 危险模式开关
+  document.getElementById('dangerToggle').addEventListener('click', () => {
+    state.dangerMode = !state.dangerMode;
+    save();
+    document.getElementById('dangerToggle').classList.toggle('checked', state.dangerMode);
+    if (state.cards.length) {
+      state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace, state.dangerMode);
       state.activeMonth = null;
       renderPlan();
     }
@@ -1510,6 +1520,7 @@
   load();
   document.getElementById('cashInput').value = state.cash || '';
   document.getElementById('graceToggle').classList.toggle('checked', state.enableGrace);
+  document.getElementById('dangerToggle').classList.toggle('checked', state.dangerMode);
   renderCards();
   renderStaggerHint();
   updateStaggerBtn();
