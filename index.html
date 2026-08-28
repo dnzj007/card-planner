@@ -1005,79 +1005,91 @@
         continue;
       }
 
-      // 2) 现金不够 → 从源卡补（自身优先，然后其他卡按 avail 降序）
-      const shortfall = payAmount - cash;
-      const sources = [];
-      // 自身可取（留 LEAVE）
-      const selfTakeable = Math.max(0, (cardAvailable[card.id] || 0) - LEAVE);
-      if (selfTakeable >= MIN_WITHDRAW) {
-        sources.push({ card, available: selfTakeable, lastRepay: null, isSelf: true });
-      }
-      cards
-        .filter(c => c.id !== card.id)
-        .sort((a, b) => (cardAvailable[b.id] || 0) - (cardAvailable[a.id] || 0))
-        .forEach(c => {
-          const takeable = Math.max(0, (cardAvailable[c.id] || 0) - LEAVE);
-          if (takeable >= MIN_WITHDRAW) {
-            sources.push({ card: c, available: takeable, lastRepay: cardLastRepay[c.id], isSelf: false });
-          }
-        });
-
-      let withdrawn = 0;
+      // 2) 现金不够 → **多轮循环**：取 → 立即还入目标 → avail恢复 → 再取 → 再还...
+      //    用一个"虚拟现金" pool 跟踪循环内部资金，不碰真实 cash
+      const MAX_LOOPS = 8;
+      let totalWithdrawn = 0;
       const withdrawals = [];
-      for (const src of sources) {
-        if (withdrawn >= shortfall) break;
-        const need = shortfall - withdrawn;
-        let take = Math.min(need, src.available);
-        if (take < MIN_WITHDRAW) continue;
+      let alreadyPaid = 0;          // 累计已还目标卡的钱
+      let loopCash = cash;          // 虚拟现金池（含初始cash + 所有轮次取现）
+      const virtualRepay = new Date(task.date); virtualRepay.setHours(15, 0, 0, 0);
 
-        let wDate;
-        if (src.isSelf) {
-          // 自身取现：还款当天之前都可以（还完就进入静置期，所以必须在还之前取）
-          wDate = new Date(task.date); wDate.setHours(10, 0, 0, 0);
-          const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
-          if (wDate <= todayNoon) {
-            wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
-            wDate.setHours(10, 0, 0, 0);
-          }
-        } else {
-          // 其他卡源：静置期过了就**立即取**（加快周转！）
-          // 旧逻辑是 "还款日的前一天"（最晚期限），现在改成最早期限
-          wDate = src.lastRepay
-            ? new Date(src.lastRepay.getTime() + silence * 3600 * 1000)
-            : new Date(task.date.getTime() - 24 * 3600 * 1000);
-          // 但最晚不能晚于目标还款日（留出还的时间）
-          const latest = new Date(task.date.getTime() - 6 * 3600 * 1000);
-          if (wDate > latest) wDate = new Date(latest);
+      for (let loop = 0; loop < MAX_LOOPS; loop++) {
+        const shortfall = payAmount - alreadyPaid - loopCash;
+        if (shortfall <= 0) break;
+
+        // 构建源卡列表（每轮重建，因为 avail 变了）
+        const sources = [];
+        const selfTakeable = Math.max(0, (cardAvailable[card.id] || 0) - LEAVE);
+        if (selfTakeable >= MIN_WITHDRAW) {
+          const baseSelfTime = loop === 0
+            ? new Date(task.date.getTime() - 24 * 3600 * 1000)
+            : virtualRepay;
+          sources.push({ card, available: selfTakeable, baseTime: baseSelfTime, isSelf: true });
         }
-        wDate = fitToWindow(wDate);
-        const wKey = src.card.id + '|' + fmtDate(wDate);
-        const cnt = dailyCount[wKey] || 0;
-        const channel = cnt >= DAILY_LIMIT ? 'B' : 'A';
+        cards
+          .filter(c => c.id !== card.id)
+          .sort((a, b) => (cardAvailable[b.id] || 0) - (cardAvailable[a.id] || 0))
+          .forEach(c => {
+            const takeable = Math.max(0, (cardAvailable[c.id] || 0) - LEAVE);
+            if (takeable >= MIN_WITHDRAW) {
+              const baseTime = cardLastRepay[c.id] || new Date(task.date.getTime() - 24 * 3600 * 1000);
+              sources.push({ card: c, available: takeable, baseTime, isSelf: false });
+            }
+          });
 
-        withdrawn += take;
-        cardAvailable[src.card.id] -= take;
-        cardCycleWithdraw[src.card.id] += take;
-        totalWithdraw += take;
-        totalCost += take * FEE_RATE;
-        dailyCount[wKey] = cnt + 1;
+        if (sources.length === 0) break;
 
-        const tag = src.isSelf ? '自取' : ('渠道' + channel + ' · 静置' + silence + 'h');
-        withdrawals.push({
-          date: wDate, action: 'withdraw', cardId: src.card.id,
-          cardName: src.card.name, amount: take, channel: tag,
-          status: 'ok',
-          note: src.isSelf ? '自身额度循环' : '源卡循环'
-        });
+        let loopWithdrawn = 0;
+        for (const src of sources) {
+          if (loopWithdrawn >= shortfall) break;
+          const need = shortfall - loopWithdrawn;
+          let take = Math.min(need, src.available);
+          if (take < MIN_WITHDRAW) continue;
+
+          let wDate = new Date(src.baseTime.getTime() + silence * 3600 * 1000);
+          const deadlineLimit = new Date(task.date.getTime() - 6 * 3600 * 1000);
+          if (wDate > deadlineLimit) continue;  // 赶不上，跳过
+          wDate = fitToWindow(wDate);
+          const wKey = src.card.id + '|' + fmtDate(wDate);
+          const cnt = dailyCount[wKey] || 0;
+          const channel = cnt >= DAILY_LIMIT ? 'B' : 'A';
+
+          loopWithdrawn += take;
+          cardAvailable[src.card.id] -= take;
+          cardCycleWithdraw[src.card.id] += take;
+          totalWithdrawn += take;
+          totalCost += take * FEE_RATE;
+          dailyCount[wKey] = cnt + 1;
+
+          const tag = src.isSelf
+            ? ('自取·轮' + (loop + 1) + '·渠' + channel)
+            : ('源' + src.card.name + '·静置' + silence + 'h');
+          withdrawals.push({
+            date: wDate, action: 'withdraw', cardId: src.card.id,
+            cardName: src.card.name, amount: take, channel: tag,
+            status: 'ok', note: src.isSelf ? '自身额度循环' : '源卡循环'
+          });
+        }
+
+        if (loopWithdrawn === 0) break;
+        loopCash += loopWithdrawn;  // 虚拟资金池加取现
+
+        // 立即还入目标卡（用虚拟资金池的钱）
+        const payThisRound = Math.min(payAmount - alreadyPaid, loopCash);
+        if (payThisRound <= 0) continue;
+        loopCash -= payThisRound;
+        alreadyPaid += payThisRound;
+        cardAvailable[card.id] += payThisRound;
+        virtualRepay.setDate(virtualRepay.getDate() + 1);  // 每轮+1天
+        cardLastRepay[card.id] = new Date(virtualRepay);    // 让后续轮次从这里算静置
       }
+
       withdrawals.forEach(w => schedule.push(w));
 
-      // === 核心：部分还，剩余滚 ===
-      // 取到的钱先回到现金池
-      cash += withdrawn;
-      // 然后算能还多少（现金池里所有的，但不超过 payAmount）
-      const payNow = Math.min(payAmount, cash);
-      const payLater = payAmount - payNow;   // 没还的部分滚入 firstRemain
+      // 最终：真实扣减 cash（真实现金），alreadyPaid = 循环累计还入
+      const payNow = alreadyPaid;
+      const payLater = payAmount - payNow;
 
       const payDate = new Date(task.date); payDate.setHours(15, 0, 0, 0);
       if (payNow > 0) {
