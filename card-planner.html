@@ -875,7 +875,10 @@
       let year = tMid.getFullYear();
       let month = tMid.getMonth();
       let due = new Date(year, month, c.dueDay);
-      if (due < tMid) {
+      // 关键：还款日过了但还在宽限期内 → 仍是本期账单（deadline = due + 宽限）
+      // 只有超过宽限期才真正滚到下个月
+      const graceEnd = new Date(due.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
+      if (graceEnd < tMid) {
         month++;
         if (month > 11) { month = 0; year++; }
         due = new Date(year, month, c.dueDay);
@@ -890,19 +893,19 @@
         deadline: new Date(firstDue),
       });
       // 循环任务（非首期）按正常 dueDay + 宽限排
-      let isFirst = false;
-      month++;
-      if (month > 11) { month = 0; year++; }
-      let loopDue = new Date(year, month, c.dueDay);
+      // 从首期 due 的下一个月开始（首期排 9/26 → 循环从 10/26 起月月有，不漏月）
+      let m2 = due.getMonth() + 1;
+      let y2 = due.getFullYear();
+      if (m2 > 11) { m2 = 0; y2++; }
+      let loopDue = new Date(y2, m2, c.dueDay);
       while (loopDue <= horizon) {
         let actualDate = loopDue;
         if (enableGrace) actualDate = new Date(loopDue.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
         // 循环账单金额 = 动态计算（模拟时根据该卡上一个周期的累计取现确定）
         tasks.push({ date: new Date(actualDate), deadline: new Date(actualDate), card: c, payAmount: null, isFirst: false });
-        month++;
-        if (month > 11) { month = 0; year++; }
-        loopDue = new Date(year, month, c.dueDay);
-        isFirst = false;
+        m2++;
+        if (m2 > 11) { m2 = 0; y2++; }
+        loopDue = new Date(y2, m2, c.dueDay);
       }
     });
 
@@ -988,7 +991,8 @@
       if (cash >= payAmount) {
         cash -= payAmount;
         cardAvailable[card.id] += payAmount;
-        cardLastRepay[card.id] = new Date(task.date);
+        const pd15 = new Date(task.date); pd15.setHours(15, 0, 0, 0);
+        cardLastRepay[card.id] = pd15;  // 用 15:00，保证后续取现排在还款之后
         cardCycleWithdraw[card.id] = 0;
         cardFirstRemain[card.id] = 0;  // 全还清了
         savedByCash += payAmount * FEE_RATE;
