@@ -914,17 +914,23 @@
       return a.deadline - b.deadline;          // 同条件下按截止日期
     });
     // 给首期任务分配实际执行日期：
-    // - 现金能覆盖的 → 立即排 today（允许提前还，让源卡尽早恢复额度）
-    // - 现金不够的   → 排 deadline（宽限最后一天），期待前面的卡已恢复额度
+    // - 现金能覆盖的 → 立即排 today（让源卡尽早恢复额度）
+    // - 现金不够的   → 排到"现金够的那张卡的次日"，等源卡恢复额度+静置期过了
+    //                  不早于 earliest，不晚于 deadline
     let cursor = new Date(tMid);
+    let lastCashAbleDate = null;
     firstTasks.forEach(ft => {
       let execDate;
       if (cashX >= ft.payAmount) {
-        // 现金够 → 排今天（允许提前还），但不能早于 earliest
         execDate = new Date(Math.max(cursor.getTime(), ft.earliest.getTime()));
+        lastCashAbleDate = execDate;
       } else {
-        // 现金不够 → 排 deadline（宽限期最后），等其他卡先恢复额度
-        execDate = new Date(ft.deadline);
+        // 等现金够的那张卡先还完 → 次日源卡恢复额度 → 再过静置期就能取
+        let base = lastCashAbleDate
+          ? new Date(lastCashAbleDate.getTime() + 24 * 3600 * 1000)   // 次日
+          : new Date(tMid);
+        execDate = new Date(Math.max(base.getTime(), ft.earliest.getTime()));
+        if (execDate > ft.deadline) execDate = new Date(ft.deadline);
       }
       tasks.push({ date: execDate, card: ft.card, payAmount: ft.payAmount, isFirst: true });
     });
@@ -1027,6 +1033,7 @@
 
         let wDate;
         if (src.isSelf) {
+          // 自身取现：还款当天之前都可以（还完就进入静置期，所以必须在还之前取）
           wDate = new Date(task.date); wDate.setHours(10, 0, 0, 0);
           const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
           if (wDate <= todayNoon) {
@@ -1034,12 +1041,14 @@
             wDate.setHours(10, 0, 0, 0);
           }
         } else {
-          wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
-          wDate.setHours(10, 0, 0, 0);
-          if (src.lastRepay) {
-            const earliest = new Date(src.lastRepay.getTime() + silence * 3600 * 1000);
-            if (wDate < earliest) wDate = new Date(earliest);
-          }
+          // 其他卡源：静置期过了就**立即取**（加快周转！）
+          // 旧逻辑是 "还款日的前一天"（最晚期限），现在改成最早期限
+          wDate = src.lastRepay
+            ? new Date(src.lastRepay.getTime() + silence * 3600 * 1000)
+            : new Date(task.date.getTime() - 24 * 3600 * 1000);
+          // 但最晚不能晚于目标还款日（留出还的时间）
+          const latest = new Date(task.date.getTime() - 6 * 3600 * 1000);
+          if (wDate > latest) wDate = new Date(latest);
         }
         wDate = fitToWindow(wDate);
         const wKey = src.card.id + '|' + fmtDate(wDate);
