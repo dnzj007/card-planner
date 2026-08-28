@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="还款规划器">
+<title>信用卡循环还款规划器</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --surface-2: #f5f5f7;
+    --surface-3: #eeeef0;
+    --border: #e5e5e7;
+    --border-strong: #d1d1d6;
+    --text-1: #1d1d1f;
+    --text-2: #6e6e73;
+    --text-3: #a1a1a6;
+    --brand: #6d4aff;
+    --brand-soft: #efe9ff;
+    --accent: #ff7a59;
+    --accent-soft: #fff1ea;
+    --warn: #f0a93b;
+    --warn-soft: #fff6e6;
+    --danger: #ff3b30;
+    --success: #2bb673;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --radius-full: 999px;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0c;
+      --surface: #1a1c22;
+      --surface-2: #20222a;
+      --surface-3: #2a2d36;
+      --border: #2d3038;
+      --border-strong: #3a3e48;
+      --text-1: #f3f4f7;
+      --text-2: #b8bcc4;
+      --text-3: #6e727a;
+      --brand: #8c6bff;
+      --brand-soft: #2a2342;
+      --accent: #ff8a6b;
+      --accent-soft: #3a2620;
+      --warn: #d99545;
+      --warn-soft: #3a2e1c;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text-1);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 20px 80px;
+  }
+  /* Header */
+  .header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 24px;
+  }
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .title {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--text-3);
+  }
+  .cash-block {
+    margin-top: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cash-label {
+    font-size: 12px;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cash-input-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .cash-input {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--text-1);
+    background: transparent;
+    border: none;
+    outline: none;
+    width: 100%;
+    letter-spacing: -0.02em;
+  }
+  .cash-unit {
+    font-size: 15px;
+    color: var(--text-3);
+    font-weight: 500;
+  }
+  /* Section */
+  .section {
+    margin-top: 28px;
+  }
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .section-title {
+    font-size: 13px;
+    color: var(--text-2);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ghost-btn {
+    background: transparent;
+    border: none;
+    color: var(--brand);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--radius);
+  }
+  .ghost-btn:active { background: var(--brand-soft); }
+  .head-actions { display: flex; gap: 4px; align-items: center; }
+  .stagger-result {
+    margin-top: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--brand);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .stagger-result.bad { border-left-color: var(--accent); }
+  .stagger-result.good { border-left-color: var(--success); }
+  .stagger-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .stagger-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .stagger-status {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--brand-soft);
+    color: var(--brand);
+  }
+  .stagger-status.good { background: #e7f7ee; color: var(--success); }
+  .stagger-status.bad { background: var(--accent-soft); color: var(--accent); }
+  .stagger-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.55;
+  }
+  .stagger-row b { color: var(--text-1); font-weight: 600; }
+  .stagger-row code {
+    font-family: var(--mono);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .gap-strip {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .gap-chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 8px;
+    background: var(--surface-2);
+    border-radius: var(--radius-full);
+    color: var(--text-2);
+  }
+  .gap-chip.tight { background: var(--accent-soft); color: var(--accent); }
+  .gap-chip.wide { background: var(--brand-soft); color: var(--brand); }
+  .stagger-hint {
+    margin-top: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--brand);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .stagger-hint b { color: var(--text-1); font-weight: 600; }
+  .stagger-hint code {
+    font-family: var(--mono);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .stagger-hint .hint-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--brand);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .stagger-hint .hint-note {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  /* Card list */
+  .card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .card-fields {
+    display: grid;
+    grid-template-columns: 1.3fr 0.7fr 0.7fr 0.55fr 0.55fr;
+    gap: 6px;
+  }
+  .card-fields .field:last-child { padding-right: 0; }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .field-label {
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.02em;
+  }
+  .field-input {
+    background: var(--surface-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    font-size: 14px;
+    color: var(--text-1);
+    font-family: inherit;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.15s;
+  }
+  .field-input:focus { border-color: var(--brand); background: var(--surface); }
+  .field-input.num { font-family: var(--mono); }
+  .del-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius);
+    font-size: 18px;
+    line-height: 1;
+    align-self: start;
+    margin-top: 14px;
+  }
+  .del-btn:active { color: var(--danger); }
+  /* Buttons */
+  .primary-btn {
+    margin-top: 20px;
+    width: 100%;
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s;
+  }
+  .primary-btn:active { opacity: 0.85; }
+  .primary-btn:disabled { background: var(--border-strong); cursor: not-allowed; }
+  /* Plan */
+  .plan-summary {
+    margin-top: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .summary-item { display: flex; flex-direction: column; gap: 4px; }
+  .summary-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
+  .summary-value { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--text-1); letter-spacing: -0.01em; }
+  .summary-value.cost { color: var(--accent); }
+  .summary-value.risk { color: var(--danger); }
+  /* Month tabs */
+  .month-tabs {
+    margin-top: 20px;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+  .month-tabs::-webkit-scrollbar { display: none; }
+  .month-tab {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--text-2);
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  .month-tab.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+  /* Timeline */
+  .timeline {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .day-group { display: flex; flex-direction: column; gap: 4px; }
+  .day-label {
+    font-size: 12px;
+    color: var(--text-3);
+    font-weight: 500;
+    padding: 4px 4px 0;
+  }
+  .task-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .task-action {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: var(--radius-full);
+  }
+  .task-action.pay { background: var(--brand-soft); color: var(--brand); }
+  .task-action.withdraw { background: var(--accent-soft); color: var(--accent); }
+  .task-action.risk { background: var(--warn-soft); color: var(--warn); }
+  .task-main { display: flex; flex-direction: column; gap: 2px; }
+  .task-card-name { font-size: 14px; font-weight: 500; color: var(--text-1); }
+  .task-meta { font-size: 12px; color: var(--text-3); }
+  .task-amount {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  /* Export */
+  .export-row {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .export-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-1);
+    cursor: pointer;
+    font-family: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+  }
+  .export-btn:active { background: var(--surface-2); }
+  .export-btn-sub { font-size: 11px; color: var(--text-3); font-weight: 400; }
+  .empty {
+    text-align: center;
+    color: var(--text-3);
+    font-size: 14px;
+    padding: 40px 20px;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .footer-note {
+    margin-top: 32px;
+    font-size: 12px;
+    color: var(--text-3);
+    line-height: 1.6;
+  }
+  .shortcuts-guide {
+    margin-top: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 4px 16px;
+  }
+  .shortcuts-guide summary {
+    cursor: pointer;
+    padding: 12px 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-2);
+    list-style: none;
+  }
+  .shortcuts-guide summary::-webkit-details-marker { display: none; }
+  .shortcuts-guide summary::before {
+    content: "▸ ";
+    color: var(--text-3);
+    transition: transform 0.15s;
+    display: inline-block;
+  }
+  .shortcuts-guide[open] summary::before { transform: rotate(90deg); }
+  .guide-body { padding: 0 0 14px; display: flex; flex-direction: column; gap: 10px; }
+  .guide-step { font-size: 13px; color: var(--text-2); line-height: 1.6; display: flex; gap: 8px; }
+  .step-num {
+    flex-shrink: 0;
+    width: 18px; height: 18px;
+    background: var(--brand-soft); color: var(--brand);
+    border-radius: var(--radius-full);
+    font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 1px;
+  }
+  .guide-step code {
+    font-family: var(--mono);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .guide-tip {
+    font-size: 12px;
+    color: var(--text-3);
+    background: var(--surface-2);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    line-height: 1.6;
+  }
+  .health-rules {
+    margin-top: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 4px 16px;
+  }
+  .health-rules summary {
+    cursor: pointer;
+    padding: 12px 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-2);
+    list-style: none;
+  }
+  .health-rules summary::-webkit-details-marker { display: none; }
+  .health-rules summary::before {
+    content: "▸ ";
+    color: var(--text-3);
+    transition: transform 0.15s;
+    display: inline-block;
+  }
+  .health-rules[open] summary::before { transform: rotate(90deg); }
+  .rule-group { padding: 0 0 14px; display: flex; flex-direction: column; gap: 10px; }
+  .rule-group-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding-top: 4px;
+  }
+  .rule-group.soft .rule-group-title { color: var(--text-3); }
+  .rule-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.55;
+    padding: 6px 0;
+    border-top: 1px dashed var(--border);
+  }
+  .rule-item:first-of-type { border-top: none; }
+  .rule-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-3);
+    min-width: 22px;
+  }
+  .rule-item b { color: var(--text-1); font-weight: 600; }
+  .rule-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 1px 8px;
+    border-radius: var(--radius-full);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .rule-tag.s { background: var(--brand-soft); color: var(--brand); }
+  .rule-tag.w { background: var(--warn-soft); color: var(--warn); }
+  @media (max-width: 480px) {
+    .card-fields { grid-template-columns: 1fr 0.7fr 0.7fr; }
+    .plan-summary { grid-template-columns: repeat(2, 1fr); }
+    .summary-value { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="header-row">
+      <div class="title">信用卡循环还款规划器</div>
+    </div>
+    <div class="subtitle">单笔本金循环复用 · 自动排期 · 一键导出苹果日历/提醒</div>
+  </div>
+
+  <!-- 现金输入 -->
+  <div class="cash-block">
+    <span class="cash-label">当前可用现金（可随时调整）</span>
+    <div class="cash-input-row">
+      <input type="number" inputmode="decimal" class="cash-input" id="cashInput" placeholder="0" min="0">
+      <span class="cash-unit">元</span>
+    </div>
+  </div>
+
+  <!-- 卡片管理 -->
+  <div class="section">
+    <div class="section-head">
+      <span class="section-title">信用卡清单</span>
+      <div class="head-actions">
+        <button class="ghost-btn" id="staggerBtn" style="display: none;">账单日错峰检测</button>
+        <button class="ghost-btn" id="addCardBtn">+ 添加</button>
+      </div>
+    </div>
+    <div class="card-list" id="cardList"></div>
+    <div id="staggerHint" class="stagger-hint" style="display: none;"></div>
+    <div id="staggerResult" style="display: none;"></div>
+  </div>
+
+  <!-- 生成按钮 -->
+  <button class="primary-btn" id="generateBtn">生成还款计划</button>
+
+  <!-- 汇总 -->
+  <div id="summaryWrap" style="display: none;">
+    <div class="plan-summary" id="planSummary"></div>
+
+    <!-- 月份切换 -->
+    <div class="month-tabs" id="monthTabs"></div>
+
+    <!-- 时间线 -->
+    <div class="timeline" id="timeline"></div>
+
+    <!-- 导出 -->
+    <div class="export-row">
+      <button class="export-btn" id="exportCalBtn">
+        导出日历
+        <span class="export-btn-sub">.ics · 系统日历导入</span>
+      </button>
+      <button class="export-btn" id="exportRemBtn">
+        导出提醒
+        <span class="export-btn-sub">Reminders.app 深链</span>
+      </button>
+    </div>
+  </div>
+
+  <details class="health-rules" open>
+    <summary>养卡规则与提醒（强制规则已写入算法）</summary>
+
+    <div class="rule-group">
+      <div class="rule-group-title">🔒 强制规则 · 已写入算法</div>
+      <div class="rule-item"><span class="rule-num">07</span><div><span class="rule-tag">时间窗</span><b>刷卡时间 9:00-22:00</b>。凌晨/深夜大额（如凌晨刷珠宝店）必触反洗钱监测；餐饮类只在午晚高峰。算法已把所有取现任务塞进 9-22 点窗口。</div></div>
+      <div class="rule-item"><span class="rule-num">08</span><div><span class="rule-tag">频次</span><b>单日单卡 ≤2 次</b>，间隔 30 分钟以上；第 3 次切第二渠道分散终端编号，避免"一机多刷"识别。</div></div>
+      <div class="rule-item"><span class="rule-num">02</span><div><span class="rule-tag">静置</span><b>还款后静置 ≥24h 再取现</b>。2026 AI 风控盯"驻留时间"，还款 1 小时内全额刷空 = 二级风控，连续 2 次可能冻结；最稳 24-48h。</div></div>
+      <div class="rule-item"><span class="rule-num">11</span><div><span class="rule-tag s">错峰</span><b>多卡账单日错峰</b>：2 卡间隔 15 天 / 3 卡 10 天 / 4 卡 7-8 天，推荐 5/15/25 日。配合"账单日次日刷"可让一组还款时另一组刚出账单尚在免息期，循环次数从 12 次/年降到 8 次/年，10 万账单省约 2400 元磨损。</div></div>
+      <div class="rule-item"><span class="rule-num">12</span><div><span class="rule-tag s">免息</span><b>大额放账单日次日</b>。账单日当天消费免息期最短（≈20 天），次日消费最长 50-56 天；隔日刷省一月息。</div></div>
+    </div>
+
+    <div class="rule-group soft">
+      <div class="rule-group-title">💡 非强制提醒 · 参考执行</div>
+      <div class="rule-item"><span class="rule-num">01</span><div><b>按时全额还款</b>。逾期上征信 5 年；最低还款年化超 18% 且被判定"还款能力不足"；连续 3 期最低还款触发自动降分。</div></div>
+      <div class="rule-item"><span class="rule-num">03</span><div><b>负债率 30%-70%</b>。月月刷爆/长期空卡连续 3 个月通常降额，半年大概率封卡；账单日前手动还款至 30% 以下。</div></div>
+      <div class="rule-item"><span class="rule-num">04</span><div><b>金额带零头</b>。避开 10000 / 5000 / 6666 / 8888 整数；用 1968 / 3270 / 987 等零散金额。</div></div>
+      <div class="rule-item"><span class="rule-num">05</span><div><b>多元化真实消费</b>。餐饮/商超/加油/网购/缴费交替，每月 20-30 笔，单一商户高频刷 = 风控重灾区。</div></div>
+      <div class="rule-item"><span class="rule-num">06</span><div><b>"25+3+1" 消费结构</b>。25 笔小额（100-500 元，占 70%）+ 3 笔中额（额度 10-30%）+ 1 笔大额（不超额度 60%），匹配周末/节假日。</div></div>
+      <div class="rule-item"><span class="rule-num">09</span><div><b>单笔不超额度 40-50%</b>。大额拆分 2-3 笔、间隔 ≥2 小时；超 5 万必须分拆，保留 10-20% 可用余额。</div></div>
+      <div class="rule-item"><span class="rule-num">10</span><div><b>分期让银行"赚到"</b>。每半年 1 次小额分期，3-6 期、不超额度 10-30%；超 6 期触发"偿债能力不足"预警。</div></div>
+      <div class="rule-item"><span class="rule-num">13</span><div><b>银行偏好 MCC</b>。餐饮 5812/5813、酒店 7011、珠宝百货 5094/5311 加分高；公益类（医院/学校）避免频繁刷。</div></div>
+      <div class="rule-item"><span class="rule-num">14</span><div><b>微信/支付宝 : 刷卡 = 3:7</b>。第三方支付单月占比超 50% 标记"消费降级"；拼多多/抖音支付超 50% 提额率仅正常的 1/3。</div></div>
+      <div class="rule-item"><span class="rule-num">15</span><div><b>资产关联 + 财力证明</b>。工行"公积金关联"可加基础分 20%；定存/理财/房产证可主动提交。</div></div>
+      <div class="rule-item"><span class="rule-num">16</span><div><span class="rule-tag w">红线</span><b>非本人账户还款</b>已被纳入风控筛查。浦发等行已限制非本人账户还款数量；建行/中行/民生加强溢缴款管理。<b>家人代还安全做法</b>：①银行 APP"家庭还款圈"绑定配偶/父母账户并完成身份验证；②带关系证明到柜台办理代还备案；③绑定持卡人本人工资卡自动还款最稳妥。频繁非本人代还（&gt;2 次/月）触发"还款能力存疑"。</div></div>
+      <div class="rule-item"><span class="rule-num">17</span><div><span class="rule-tag w">预警</span><b>收到"规范用卡"短信</b> = 已被盯上；立即降负债、小额多笔真实消费 1-2 个月可解除预警。</div></div>
+      <div class="rule-item"><span class="rule-num">18</span><div><b>推销分期电话一律拒</b>。多为第三方外包无提额权限；万能话术："我不差钱，不需要任何业务"，挂断不影响用卡。</div></div>
+      <div class="rule-item"><span class="rule-num">19</span><div><b>睡眠卡自动降额</b>。交行连续 6 月无交易自动降额；中信/工行明确执行；保留每月 3-5 笔小额或注销。</div></div>
+      <div class="rule-item"><span class="rule-num">20</span><div><b>异地连续刷卡 = 盗刷预警</b>。跨省市刷卡前通过 APP"行程报备"提交凭证；同理境外消费提前向银行报备。</div></div>
+    </div>
+  </details>
+
+  <div class="footer-note">
+    规则：每次取现手续费 0.056%；同一张卡单日最多取现 2 次，第 3 次自动切换第二渠道（同费率）；还款日跨月按月滚动，默认生成未来 3 个月计划；现金充足时优先用现金还，零磨损；现金不足时从已还清卡取现补足，取现时间强制塞进 9-22 点且源卡静置 ≥24h。
+  </div>
+
+  <details class="shortcuts-guide">
+    <summary>如何在 iOS 上把本工具变成快捷指令</summary>
+    <div class="guide-body">
+      <p class="guide-step"><span class="step-num">1</span> 把本 HTML 文件上传到任意静态托管（GitHub Pages / iCloud / 腾讯云 COS 任选其一），复制其 URL，例如 <code>https://your-name.github.io/card-planner.html</code>。</p>
+      <p class="guide-step"><span class="step-num">2</span> 在 iPhone 上打开"快捷指令"App → 新建快捷指令 → 添加动作 <code>打开 URL</code>，URL 填上一步的链接。</p>
+      <p class="guide-step"><span class="step-num">3</span> 添加动作 <code>等待</code>（用户输入完现金与卡片、点击"生成计划"后再继续），或在 URL 后接 <code>&amp;auto=1</code> 触发自动滚动。</p>
+      <p class="guide-step"><span class="step-num">4</span> 在快捷指令详情页"添加到主屏幕"，命名"还款规划"，可选图标。下次一键进入工具。</p>
+      <p class="guide-step"><span class="step-num">5</span> 在工具内点"导出日历"生成 .ics，Safari 会自动调起系统日历导入；点"导出提醒"下载任务清单并唤起 Reminders.app。</p>
+      <p class="guide-tip">提示：也可以把本文件直接 AirDrop 到 iPhone Safari 打开 → Safari 分享菜单 →"添加到主屏幕"，无需快捷指令即可作为 PWA 离线使用。</p>
+    </div>
+  </details>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  const STORAGE_KEY = 'cardPlanner.v2';
+  const FEE_RATE = 0.00056;   // 0.056%
+  const DAILY_LIMIT = 2;       // 单日单卡最多取现次数
+  const MONTHS_HORIZON = 3;    // 滚动 3 个月
+
+  // ---------- 数据持久化 ----------
+  const state = {
+    cash: 0,
+    cards: [],  // {id, name, totalLimit, currentLimit, billDay, dueDay}
+    plan: null, // {schedule, totalCost, finalCash, byMonth}
+    activeMonth: null,
+    staggerDiag: null,
+  };
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const data = JSON.parse(raw);
+        state.cash = data.cash || 0;
+        state.cards = (data.cards || []).map(migrateCard);
+      }
+    } catch(e) {}
+    if (state.cards.length === 0) {
+      state.cards = [
+        { id: uid(), name: '招行', totalLimit: 30000, currentLimit: 5000, billDay: 5, dueDay: 25 },
+        { id: uid(), name: '中信', totalLimit: 50000, currentLimit: 12000, billDay: 12, dueDay: 1 },
+      ];
+    }
+  }
+  // 兼容旧数据：把 limit 迁移成 totalLimit + currentLimit
+  function migrateCard(c) {
+    if (c.totalLimit !== undefined) return c;
+    return {
+      id: c.id || uid(),
+      name: c.name || '新卡',
+      totalLimit: c.limit || 0,
+      currentLimit: c.limit || 0,
+      billDay: c.billDay || 1,
+      dueDay: c.dueDay || 1,
+    };
+  }
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      cash: state.cash, cards: state.cards,
+    }));
+  }
+  function uid() { return 'c' + Math.random().toString(36).slice(2, 9); }
+
+  // ---------- 日期工具 ----------
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmtDate(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+  }
+  function fmtMonth(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth()+1);
+  }
+  function monthLabel(d) {
+    return (d.getMonth()+1) + '月';
+  }
+  function addMonths(date, n) {
+    const d = new Date(date);
+    d.setMonth(d.getMonth() + n);
+    return d;
+  }
+  // 计算从 today 之后第一个还款日（含今天）
+  function nextDueDate(today, dueDay) {
+    const d = new Date(today.getFullYear(), today.getMonth(), dueDay);
+    if (d < today) d.setMonth(d.getMonth() + 1);
+    return d;
+  }
+
+  // ---------- 算法：循环还款模拟（V3 减磨损版） ----------
+  // 模型假设：每张卡每月需还金额 = 卡额度（账单满额）
+  // 核心优化：现金够时直接还、不取现 → 零磨损；现金不够才从已还清卡取现补足
+  // 强制规则：取现时间窗 9:00-22:00；源卡静置 ≥24h；单日单卡 ≤2 次，第 3 次切渠道 B
+  const SILENCE_HOURS = 24;          // 还款后静置小时数
+  const WINDOW_START = 9;            // 取现时间窗起点
+  const WINDOW_END = 22;             // 取现时间窗终点（含）
+  function generatePlan(cards, cashX, today) {
+    const horizon = addMonths(today, MONTHS_HORIZON);
+    // 1. 枚举所有还款任务（每月账单 = 总额度 - 现有额度；还完后现有=总额）
+    const tasks = [];
+    // 初始每张卡的下月账单金额
+    const initBill = {};
+    cards.forEach(c => { initBill[c.id] = Math.max(0, c.totalLimit - c.currentLimit); });
+    cards.forEach(c => {
+      // 首个还款日：从今天之后第一个 dueDay
+      let d = nextDueDate(today, c.dueDay);
+      let isFirst = true;
+      while (d <= horizon) {
+        // 第一期账单 = 当前已用额度（total - current）；后续每月账单假设=总额度（满额用满）
+        // 更真实：后续每月账单 = 总额度（持续满额用），但允许用户在"现有额度"输入框反映实际
+        const payAmount = isFirst ? initBill[c.id] : c.totalLimit;
+        tasks.push({ date: new Date(d), card: c, payAmount, isFirst });
+        d = addMonths(d, 1);
+        isFirst = false;
+      }
+    });
+    tasks.sort((a, b) => a.date - b.date);
+
+    // 2. 模拟
+    let cash = cashX;
+    // 卡状态：available = 当前可用取现额度；初始 = currentLimit（用户输入的现有额度）
+    const cardAvailable = {};
+    const cardLastRepay = {};
+    cards.forEach(c => { cardAvailable[c.id] = c.currentLimit; });
+    const dailyCount = {};
+    const schedule = [];
+    let totalWithdraw = 0;
+    let totalCost = 0;
+    let savedByCash = 0;
+    let riskCount = 0;
+
+    function fitToWindow(d) {
+      let h = d.getHours();
+      if (h < WINDOW_START) d.setHours(WINDOW_START, 0, 0, 0);
+      else if (h >= WINDOW_END) {
+        d.setDate(d.getDate() + 1);
+        d.setHours(WINDOW_START, 0, 0, 0);
+      }
+      return d;
+    }
+
+    for (const task of tasks) {
+      const card = task.card;
+      const payAmount = task.payAmount;
+
+      // 情况 A：现金够 → 直接还，零磨损
+      if (cash >= payAmount) {
+        cash -= payAmount;
+        // 还款后该卡可用额度恢复到总额度
+        cardAvailable[card.id] = card.totalLimit;
+        cardLastRepay[card.id] = new Date(task.date);
+        savedByCash += payAmount * FEE_RATE;
+        schedule.push({
+          date: new Date(task.date), action: 'pay', cardId: card.id,
+          cardName: card.name, amount: payAmount, channel: '-',
+          status: 'ok',
+          note: task.isFirst ? '首期账单 · 现金还 · 零磨损' : '现金还 · 零磨损'
+        });
+        continue;
+      }
+
+      // 情况 B：现金不够 → 从已还清卡取现补足
+      const shortfall = payAmount - cash;
+      const sources = cards
+        .filter(c => c.id !== card.id && cardAvailable[c.id] > 0)
+        .map(c => ({ card: c, available: cardAvailable[c.id], lastRepay: cardLastRepay[c.id] }))
+        .sort((a, b) => b.available - a.available);
+
+      let withdrawn = 0;
+      const withdrawals = [];
+      for (const src of sources) {
+        if (withdrawn >= shortfall) break;
+        const need = shortfall - withdrawn;
+        const take = Math.min(need, src.available);
+
+        let wDate = new Date(task.date.getTime() - 24 * 60 * 60 * 1000);
+        wDate.setHours(10, 0, 0, 0);
+        if (src.lastRepay) {
+          const earliest = new Date(src.lastRepay.getTime() + SILENCE_HOURS * 3600 * 1000);
+          if (wDate < earliest) wDate = new Date(earliest);
+        }
+        wDate = fitToWindow(wDate);
+        const wKey = src.card.id + '|' + fmtDate(wDate);
+        const cnt = dailyCount[wKey] || 0;
+        const channel = cnt >= DAILY_LIMIT ? 'B' : 'A';
+
+        withdrawn += take;
+        cardAvailable[src.card.id] -= take;
+        totalWithdraw += take;
+        totalCost += take * FEE_RATE;
+        dailyCount[wKey] = cnt + 1;
+
+        const silenceH = src.lastRepay
+          ? Math.max(SILENCE_HOURS, Math.round((wDate - src.lastRepay) / 3600000))
+          : SILENCE_HOURS;
+        withdrawals.push({
+          date: wDate, action: 'withdraw', cardId: src.card.id,
+          cardName: src.card.name, amount: take,
+          channel: '渠道' + channel + ' · 静置' + silenceH + 'h',
+          status: 'ok', note: '补足缺口'
+        });
+      }
+
+      withdrawals.forEach(w => schedule.push(w));
+
+      if (withdrawn >= shortfall) {
+        cash += withdrawn - payAmount;
+        cardAvailable[card.id] = card.totalLimit;
+        cardLastRepay[card.id] = new Date(task.date);
+        schedule.push({
+          date: new Date(task.date), action: 'pay', cardId: card.id,
+          cardName: card.name, amount: payAmount, channel: '-',
+          status: 'ok', note: task.isFirst ? '首期账单 · 取现补足' : '取现补足 · 含磨损'
+        });
+      } else {
+        schedule.push({
+          date: new Date(task.date), action: 'pay', cardId: card.id,
+          cardName: card.name, amount: payAmount, channel: '-',
+          status: 'risk', note: '资金不足 · 需追加现金'
+        });
+        riskCount++;
+      }
+    }
+
+    // 3. 按月分组
+    const byMonth = {};
+    schedule.forEach(t => {
+      const m = fmtMonth(t.date);
+      if (!byMonth[m]) byMonth[m] = [];
+      byMonth[m].push(t);
+    });
+    Object.values(byMonth).forEach(arr => arr.sort((a, b) => a.date - b.date));
+
+    return {
+      schedule, totalCost, totalWithdraw, savedByCash,
+      finalCash: cash, byMonth, riskCount,
+    };
+  }
+
+  // ---------- 渲染：卡片列表 ----------
+  function renderCards() {
+    const wrap = document.getElementById('cardList');
+    wrap.innerHTML = '';
+    state.cards.forEach(card => {
+      const item = document.createElement('div');
+      item.className = 'card-item';
+      item.innerHTML = `
+        <div class="card-fields">
+          <div class="field">
+            <span class="field-label">卡名</span>
+            <input class="field-input" data-id="${card.id}" data-k="name" value="${escapeHtml(card.name)}" placeholder="招行">
+          </div>
+          <div class="field">
+            <span class="field-label">总额度</span>
+            <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="totalLimit" value="${card.totalLimit}" min="0">
+          </div>
+          <div class="field">
+            <span class="field-label">现有额度</span>
+            <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="currentLimit" value="${card.currentLimit}" min="0">
+          </div>
+          <div class="field">
+            <span class="field-label">账单日</span>
+            <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="billDay" value="${card.billDay}" min="1" max="31">
+          </div>
+          <div class="field">
+            <span class="field-label">还款日</span>
+            <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="dueDay" value="${card.dueDay}" min="1" max="31">
+          </div>
+        </div>
+        <button class="del-btn" data-del="${card.id}" aria-label="删除">×</button>
+      `;
+      wrap.appendChild(item);
+      // 顶部展示下月账单 = 总额度 - 现有额度，并提示账单日次日
+      const bill = Math.max(0, card.totalLimit - card.currentLimit);
+      const billTag = document.createElement('div');
+      billTag.style.cssText = 'grid-column: 1 / -1; font-size: 12px; color: var(--text-3); padding-top: 6px; border-top: 1px dashed var(--border); margin-top: 4px; display: flex; flex-direction: column; gap: 2px;';
+      billTag.innerHTML = `
+        <span>下月账单 ≈ <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(bill)}</span>（总额 - 现有）</span>
+        <span style="color: var(--text-muted);">账单日（${card.billDay}号）次日大额消费，免息期最长 50-56 天</span>
+      `;
+      item.appendChild(billTag);
+    });
+    // 绑定输入
+    wrap.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const id = e.target.dataset.id;
+        const k = e.target.dataset.k;
+        const card = state.cards.find(c => c.id === id);
+        if (!card) return;
+        if (k === 'totalLimit' || k === 'currentLimit' || k === 'billDay' || k === 'dueDay') {
+          card[k] = parseInt(e.target.value) || 0;
+        } else {
+          card[k] = e.target.value;
+        }
+        save();
+        // 实时更新下月账单标签
+        const item = e.target.closest('.card-item');
+        if (item) {
+          const tag = item.querySelector('div[style*="grid-column: 1 / -1"]');
+          if (tag) {
+            const bill = Math.max(0, card.totalLimit - card.currentLimit);
+            tag.innerHTML = `
+              <span>下月账单 ≈ <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(bill)}</span>（总额 - 现有）</span>
+              <span style="color: var(--text-muted);">账单日（${card.billDay}号）次日大额消费，免息期最长 50-56 天</span>
+            `;
+          }
+        }
+        updateStaggerBtn();
+      });
+    });
+    wrap.querySelectorAll('[data-del]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const id = e.target.dataset.del;
+        state.cards = state.cards.filter(c => c.id !== id);
+        save();
+        renderCards();
+        updateStaggerBtn();
+      });
+    });
+    renderStaggerHint();
+  }
+  function fmtMoneyStatic(n) {
+    if (Math.abs(n) >= 10000) return (n / 10000).toFixed(2) + 'w';
+    return n.toFixed(0);
+  }
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // ---------- 渲染：计划 ----------
+  function renderPlan() {
+    const summaryWrap = document.getElementById('summaryWrap');
+    if (!state.plan) {
+      summaryWrap.style.display = 'none';
+      return;
+    }
+    summaryWrap.style.display = 'block';
+    const { totalCost, totalWithdraw, savedByCash, finalCash, byMonth, schedule, riskCount } = state.plan;
+
+    // 汇总
+    const coverCount = new Set(schedule.map(t => t.cardId)).size;
+    const totalPay = schedule.filter(t => t.action === 'pay' && t.status === 'ok')
+                            .reduce((s, t) => s + t.amount, 0);
+    document.getElementById('planSummary').innerHTML = `
+      <div class="summary-item">
+        <span class="summary-label">总还款</span>
+        <span class="summary-value">${fmtMoney(totalPay)}</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">取现金额</span>
+        <span class="summary-value">${fmtMoney(totalWithdraw)}</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">手续费</span>
+        <span class="summary-value cost">${fmtMoney(totalCost)}</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">省下磨损</span>
+        <span class="summary-value" style="color: var(--success);">${fmtMoney(savedByCash)}</span>
+      </div>
+      <div class="summary-item" style="grid-column: span 2;">
+        <span class="summary-label">${riskCount > 0 ? '资金缺口' : '剩余本金'}</span>
+        <span class="summary-value ${riskCount > 0 ? 'risk' : ''}">${riskCount > 0 ? riskCount + ' 笔待补' : fmtMoney(finalCash)}</span>
+      </div>
+      <div class="summary-item" style="grid-column: span 2;">
+        <span class="summary-label">覆盖卡数</span>
+        <span class="summary-value">${coverCount}</span>
+      </div>
+    `;
+
+    // 月份 tab
+    const months = Object.keys(byMonth).sort();
+    if (!state.activeMonth || !byMonth[state.activeMonth]) {
+      state.activeMonth = months[0];
+    }
+    const tabs = document.getElementById('monthTabs');
+    tabs.innerHTML = '';
+    months.forEach(m => {
+      const btn = document.createElement('button');
+      btn.className = 'month-tab' + (m === state.activeMonth ? ' active' : '');
+      const d = new Date(m + '-01');
+      btn.textContent = monthLabel(d) + ' · ' + byMonth[m].length + '项';
+      btn.addEventListener('click', () => {
+        state.activeMonth = m;
+        renderPlan();
+      });
+      tabs.appendChild(btn);
+    });
+
+    // 时间线
+    const tl = document.getElementById('timeline');
+    const tasks = byMonth[state.activeMonth] || [];
+    if (tasks.length === 0) {
+      tl.innerHTML = '<div class="empty">本月无任务</div>';
+      return;
+    }
+    // 按日分组
+    const groups = {};
+    tasks.forEach(t => {
+      const k = fmtDate(t.date);
+      if (!groups[k]) groups[k] = [];
+      groups[k].push(t);
+    });
+    tl.innerHTML = '';
+    Object.keys(groups).forEach(day => {
+      const g = document.createElement('div');
+      g.className = 'day-group';
+      g.innerHTML = `<div class="day-label">${day}</div>`;
+      groups[day].forEach(t => {
+        const row = document.createElement('div');
+        row.className = 'task-row';
+        const actionClass = t.status === 'risk' ? 'risk' : (t.action === 'pay' ? 'pay' : 'withdraw');
+        const actionLabel = t.status === 'risk' ? '风险' : (t.action === 'pay' ? '还款' : '取现');
+        const meta = t.note ? t.note : (t.channel !== '-' ? t.channel : '');
+        row.innerHTML = `
+          <span class="task-action ${actionClass}">${actionLabel}</span>
+          <div class="task-main">
+            <span class="task-card-name">${escapeHtml(t.cardName)}</span>
+            <span class="task-meta">${escapeHtml(meta)}</span>
+          </div>
+          <span class="task-amount">${fmtMoney(t.amount)}</span>
+        `;
+        g.appendChild(row);
+      });
+      tl.appendChild(g);
+    });
+  }
+  function fmtMoney(n) {
+    if (Math.abs(n) >= 10000) {
+      return (n / 10000).toFixed(2) + 'w';
+    }
+    return n.toFixed(0);
+  }
+
+  // ---------- 导出 .ics ----------
+  function buildICS() {
+    if (!state.plan) return '';
+    const lines = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//CardPlanner//CN','CALSCALE:GREGORIAN'];
+    state.plan.schedule.forEach(t => {
+      const start = t.date;
+      const end = new Date(start.getTime() + 15 * 60 * 1000); // 15 分钟
+      lines.push('BEGIN:VEVENT');
+      lines.push('UID:' + t.date.getTime() + '-' + t.cardId + '@cardplanner');
+      lines.push('DTSTAMP:' + icsTime(new Date()));
+      lines.push('DTSTART:' + icsTime(start));
+      lines.push('DTEND:' + icsTime(end));
+      const action = t.action === 'pay' ? '还款' : '取现';
+      const riskTag = t.status === 'risk' ? ' [资金不足]' : '';
+      lines.push('SUMMARY:' + action + ' ' + t.cardName + ' ' + fmtMoney(t.amount) + (t.channel !== '-' ? ' ' + t.channel : '') + riskTag);
+      lines.push('DESCRIPTION:金额 ' + t.amount.toFixed(2) + ' 元' + (t.channel !== '-' ? '，渠道 ' + t.channel : '') + riskTag);
+      lines.push('END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
+  }
+  function icsTime(d) {
+    return d.getUTCFullYear() + pad(d.getUTCMonth()+1) + pad(d.getUTCDate()) + 'T' +
+           pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + 'Z';
+  }
+
+  function downloadICS() {
+    const ics = buildICS();
+    if (!ics) return;
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'card-plan-' + fmtDate(new Date()) + '.ics';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // ---------- 导出提醒：深链 ----------
+  // iOS Reminders 支持 data: URL 或 x-apple-reminderkit:// 深链
+  // 最稳的方式：每条任务生成 reminders:// 唤起（部分 iOS 版本支持 list & title 参数）
+  // 兼容方案：打开 remindersapp:// 让用户手动新增；同时输出可复制的纯文本列表
+  function exportReminders() {
+    if (!state.plan) return;
+    // 尝试用 data: URL 方式生成可下载的任务清单 txt
+    const lines = ['还款计划 · ' + fmtDate(new Date()), ''];
+    state.plan.schedule.forEach(t => {
+      const action = t.action === 'pay' ? '还款' : '取现';
+      const riskTag = t.status === 'risk' ? ' [资金不足]' : '';
+      lines.push(fmtDate(t.date) + ' · ' + action + ' · ' + t.cardName + ' · ' + t.amount.toFixed(0) + ' 元' + (t.channel !== '-' ? ' · ' + t.channel : '') + riskTag);
+    });
+    lines.push('', '总手续费 ' + state.plan.totalCost.toFixed(2) + ' 元');
+    const txt = lines.join('\n');
+    const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'reminders-' + fmtDate(new Date()) + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // 同时尝试唤起 Reminders.app
+    setTimeout(() => { try { location.href = 'reminders://'; } catch(e){} }, 200);
+  }
+
+  // ---------- 事件 ----------
+  document.getElementById('cashInput').addEventListener('input', e => {
+    state.cash = parseFloat(e.target.value) || 0;
+    save();
+    updateStaggerBtn();
+  });
+  document.getElementById('addCardBtn').addEventListener('click', () => {
+    state.cards.push({ id: uid(), name: '新卡', totalLimit: 0, currentLimit: 0, billDay: 1, dueDay: 1 });
+    save();
+    renderCards();
+    updateStaggerBtn();
+  });
+
+  // ---------- 错峰检测 ----------
+  function firstBillSum() {
+    return state.cards.reduce((s, c) => s + Math.max(0, c.totalLimit - c.currentLimit), 0);
+  }
+  // 现金够覆盖首期账单总和 → 视为"资金充足"，显示错峰按钮
+  function updateStaggerBtn() {
+    const btn = document.getElementById('staggerBtn');
+    const sufficient = state.cash > 0 && state.cards.length >= 2 && state.cash >= firstBillSum();
+    btn.style.display = sufficient ? '' : 'none';
+    if (!sufficient) document.getElementById('staggerResult').style.display = 'none';
+  }
+  // 常驻提示：账单日错峰建议（无视现金充足，提前规划）
+  function renderStaggerHint() {
+    const wrap = document.getElementById('staggerHint');
+    const cards = state.cards;
+    if (cards.length < 2) { wrap.style.display = 'none'; return; }
+    const sorted = [...cards].sort((a, b) => a.billDay - b.billDay);
+    const cur = sorted.map(c => c.billDay + '号').join(' / ');
+    const n = cards.length;
+    let rec;
+    if (n === 2) rec = '5 / 20 号';
+    else if (n === 3) rec = '5 / 15 / 25 号';
+    else if (n === 4) rec = '5 / 13 / 20 / 27 号';
+    else rec = Array.from({length: n}, (_, i) => Math.round(i * 30 / n) + 1).join(' / ') + ' 号';
+    // 评估当前是否已错峰
+    const ideal = Math.floor(30 / n);
+    const days = sorted.map(c => c.billDay);
+    const gaps = [];
+    for (let i = 0; i < n; i++) {
+      const next = (i + 1) % n;
+      let gap = days[next] - days[i];
+      if (gap <= 0) gap += 30;
+      gaps.push(gap);
+    }
+    const minGap = Math.min(...gaps);
+    const maxGap = Math.max(...gaps);
+    const isGood = minGap >= ideal * 0.7 && maxGap <= ideal * 1.5;
+    wrap.style.display = '';
+    wrap.style.borderLeftColor = isGood ? 'var(--success)' : 'var(--brand)';
+    wrap.innerHTML = `
+      <span class="hint-title">${isGood ? '账单日已错峰' : '账单日错峰建议'}</span>
+      <span>当前分布：<code>${cur}</code>${isGood ? '（间隔合理）' : ` → 推荐调整为 <code>${rec}</code>`}</span>
+      <span>规则：2 卡间隔 15 天 / 3 卡 10 天 / 4 卡 7-8 天，避开月末。每年通常限改 1 次账单日，需自行联系银行 APP 或客服。</span>
+      <span class="hint-note">错峰让一组还款时另一组尚在免息期，循环次数从 12 次/年降到约 8 次/年，配合"账单日次日大额消费"可最大化免息期 50-56 天。</span>
+    `;
+  }
+  function diagnoseStagger(cards) {
+    const n = cards.length;
+    const sorted = [...cards].sort((a, b) => a.billDay - b.billDay);
+    const days = sorted.map(c => ({ name: c.name, day: c.billDay, total: c.totalLimit, current: c.currentLimit }));
+    // 计算循环间隔
+    const gaps = [];
+    for (let i = 0; i < n; i++) {
+      const next = (i + 1) % n;
+      let gap = days[next].day - days[i].day;
+      if (gap <= 0) gap += 30;
+      gaps.push({ from: days[i], to: days[next], gap });
+    }
+    const ideal = Math.floor(30 / n);
+    const minGap = Math.min(...gaps.map(g => g.gap));
+    const maxGap = Math.max(...gaps.map(g => g.gap));
+    // 推荐方案
+    let recommended;
+    if (n === 2) recommended = [5, 20];
+    else if (n === 3) recommended = [5, 15, 25];
+    else if (n === 4) recommended = [5, 13, 20, 27];
+    else recommended = Array.from({length: n}, (_, i) => Math.round((i * 30 / n) + 1) % 30 || 1);
+    // 评估：最短间隔 ≥ 理想 70% 且 最长 ≤ 理想 150% → 良好
+    const isGood = minGap >= ideal * 0.7 && maxGap <= ideal * 1.5;
+    // 预估省下磨损：错峰后循环次数从 12 次/年降到 ~8 次/年
+    const monthlyBill = cards.reduce((s, c) => s + Math.max(0, c.totalLimit - c.currentLimit), 0);
+    const savedFee = monthlyBill * FEE_RATE * 4; // 假设每月少 1 次取现，年省 4 次
+    return { n, days, gaps, ideal, minGap, maxGap, recommended, isGood, savedFee, monthlyBill };
+  }
+  function renderStagger() {
+    const wrap = document.getElementById('staggerResult');
+    if (!state.staggerDiag) { wrap.style.display = 'none'; return; }
+    const d = state.staggerDiag;
+    wrap.style.display = '';
+    wrap.className = 'stagger-result ' + (d.isGood ? 'good' : 'bad');
+    const gapChips = d.gaps.map(g => {
+      const cls = g.gap < d.ideal * 0.7 ? 'tight' : (g.gap > d.ideal * 1.5 ? 'wide' : '');
+      return `<span class="gap-chip ${cls}">${g.from.name} ${g.from.day}号 → ${g.to.name} ${g.to.day}号 · ${g.gap}天</span>`;
+    }).join('');
+    const recStr = d.recommended.map((day, i) => `卡${i+1}: ${day}号`).join(' / ');
+    wrap.innerHTML = `
+      <div class="stagger-head">
+        <span class="stagger-title">账单日错峰诊断</span>
+        <span class="stagger-status ${d.isGood ? 'good' : 'bad'}">${d.isGood ? '已错峰' : '建议调整'}</span>
+      </div>
+      <div class="stagger-row">
+        <span>当前分布：${d.days.map(c => c.name + ' ' + c.day + '号').join(' / ')}</span>
+        <div class="gap-strip">${gapChips}</div>
+      </div>
+      <div class="stagger-row">
+        <span>理想间隔 <code>${d.ideal}天</code> · 实际最短 <code>${d.minGap}天</code> · 最长 <code>${d.maxGap}天</code></span>
+      </div>
+      ${!d.isGood ? `
+      <div class="stagger-row">
+        <span><b>建议方案</b>：${recStr}</span>
+        <span style="color: var(--text-muted); font-size: 12px;">需自行联系银行 APP 或客服修改账单日（每年通常限改 1 次）</span>
+      </div>` : ''}
+      <div class="stagger-row">
+        <span><b>预估省下磨损</b>：<code style="color: var(--success);">${fmtMoneyStatic(d.savedFee)}</code>/年（错峰后循环次数从 12 次/年降到 ~8 次/年）</span>
+      </div>
+      <div class="stagger-row" style="color: var(--text-muted); font-size: 12px;">
+        说明：账单日只影响免息期与循环节奏，不影响还款计划本身（还款日驱动）。错峰让一组还款时另一组尚在免息期，减少取现补足次数。
+      </div>
+    `;
+  }
+  document.getElementById('staggerBtn').addEventListener('click', () => {
+    state.staggerDiag = diagnoseStagger(state.cards);
+    renderStagger();
+    document.getElementById('staggerResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    if (!state.cards.length) { alert('请先添加信用卡'); return; }
+    if (state.cash <= 0) { alert('请输入可用现金'); return; }
+    state.plan = generatePlan(state.cards, state.cash, new Date());
+    state.activeMonth = null;
+    renderPlan();
+    document.getElementById('summaryWrap').scrollIntoView({ behavior: 'smooth' });
+  });
+  document.getElementById('exportCalBtn').addEventListener('click', downloadICS);
+  document.getElementById('exportRemBtn').addEventListener('click', exportReminders);
+
+  // ---------- 初始化 ----------
+  load();
+  document.getElementById('cashInput').value = state.cash || '';
+  renderCards();
+  renderStaggerHint();
+  updateStaggerBtn();
+  if (state.plan) renderPlan();
+})();
+</script>
+</body>
+</html>
