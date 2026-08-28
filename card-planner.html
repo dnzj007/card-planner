@@ -898,7 +898,7 @@
         let actualDate = loopDue;
         if (enableGrace) actualDate = new Date(loopDue.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
         // 循环账单金额 = 动态计算（模拟时根据该卡上一个周期的累计取现确定）
-        tasks.push({ date: new Date(actualDate), card: c, payAmount: null, isFirst: false });
+        tasks.push({ date: new Date(actualDate), deadline: new Date(actualDate), card: c, payAmount: null, isFirst: false });
         month++;
         if (month > 11) { month = 0; year++; }
         loopDue = new Date(year, month, c.dueDay);
@@ -932,7 +932,7 @@
         execDate = new Date(Math.max(base.getTime(), ft.earliest.getTime()));
         if (execDate > ft.deadline) execDate = new Date(ft.deadline);
       }
-      tasks.push({ date: execDate, card: ft.card, payAmount: ft.payAmount, isFirst: true });
+      tasks.push({ date: execDate, deadline: ft.deadline, card: ft.card, payAmount: ft.payAmount, isFirst: true });
     });
 
     tasks.sort((a, b) => a.date - b.date);
@@ -973,16 +973,14 @@
 
     for (const task of tasks) {
       const card = task.card;
-      // 循环账单 = 上期从该卡取走的 + 之前没还完滚下来的
+      // 循环账单 = 上期从该卡取走的 + 之前没还完滚下来的（诚实账单，不造假不丢失）
       let payAmount = task.payAmount;
       if (payAmount === null) {
         const cycleAmt = cardCycleWithdraw[card.id] || 0;
         const remainAmt = cardFirstRemain[card.id] || 0;
-        const availAmt = cardAvailable[card.id] || 0;
-        payAmount = Math.max(MIN_WITHDRAW, Math.min(cycleAmt + remainAmt, availAmt, card.totalLimit * 0.3));
-        if (payAmount > card.totalLimit) payAmount = card.totalLimit;
+        payAmount = cycleAmt + remainAmt;
       }
-      // 没人欠这张卡（payAmount=0），跳过
+      // 该卡没有循环账单（没人从它取过钱、也没有滚存）→ 跳过
       if (!payAmount || payAmount <= 0) continue;
 
       // === 统一还入逻辑：算总共能凑多少（现金 + 源卡能取的），部分还，剩余滚 ===
@@ -1005,14 +1003,17 @@
         continue;
       }
 
-      // 2) 现金不够 → **多轮循环**：取 → 立即还入目标 → avail恢复 → 再取 → 再还...
-      //    用一个"虚拟现金" pool 跟踪循环内部资金，不碰真实 cash
+      // 2) 现金不够 → **多轮循环**：取 → 6h后还入 → avail恢复 → 再取 → 再还...
+      //    每轮产生独立的取现/还款任务，直到凑够 payAmount 或到 deadline（宽限期最后一天）
+      //    用 loopCash 资金池跟踪，不碰真实 cash，最后一次性结算
       const MAX_LOOPS = 8;
-      let totalWithdrawn = 0;
       const withdrawals = [];
-      let alreadyPaid = 0;          // 累计已还目标卡的钱
-      let loopCash = cash;          // 虚拟现金池（含初始cash + 所有轮次取现）
-      const virtualRepay = new Date(task.date); virtualRepay.setHours(15, 0, 0, 0);
+      const roundPays = [];       // 每轮的还款任务
+      let alreadyPaid = 0;
+      let loopCash = cash;
+      // 截止线 = deadline 当天 21:00（取现窗口内），不是 task.date！
+      const deadlineLimit = new Date(task.deadline || task.date);
+      deadlineLimit.setHours(21, 0, 0, 0);
 
       for (let loop = 0; loop < MAX_LOOPS; loop++) {
         const shortfall = payAmount - alreadyPaid - loopCash;
@@ -1022,10 +1023,9 @@
         const sources = [];
         const selfTakeable = Math.max(0, (cardAvailable[card.id] || 0) - LEAVE);
         if (selfTakeable >= MIN_WITHDRAW) {
-          const baseSelfTime = loop === 0
-            ? new Date(task.date.getTime() - 24 * 3600 * 1000)
-            : virtualRepay;
-          sources.push({ card, available: selfTakeable, baseTime: baseSelfTime, isSelf: true });
+          // 自身：baseTime = 上次还款时间（首轮没有就用 task.date 前一天）
+          const bt = cardLastRepay[card.id] || new Date(task.date.getTime() - 24 * 3600 * 1000);
+          sources.push({ card, available: selfTakeable, baseTime: bt, isSelf: true });
         }
         cards
           .filter(c => c.id !== card.id)
@@ -1041,16 +1041,22 @@
         if (sources.length === 0) break;
 
         let loopWithdrawn = 0;
+        let lastWd = null;
         for (const src of sources) {
           if (loopWithdrawn >= shortfall) break;
           const need = shortfall - loopWithdrawn;
           let take = Math.min(need, src.available);
           if (take < MIN_WITHDRAW) continue;
 
-          let wDate = new Date(src.baseTime.getTime() + silence * 3600 * 1000);
-          const deadlineLimit = new Date(task.date.getTime() - 6 * 3600 * 1000);
-          if (wDate > deadlineLimit) continue;  // 赶不上，跳过
+          // 取现时间 = max(源卡静置期满, 目标还款日前一天)
+          // 近任务（如次日还款）→ 静置一过立即取（激进周转）
+          // 远任务（如下月账单）→ 提前一天取，不让资金闲置
+          const earliest = src.baseTime.getTime() + silence * 3600 * 1000;
+          const dayBefore = task.date.getTime() - 24 * 3600 * 1000;
+          let wDate = new Date(Math.max(earliest, dayBefore));
+          if (wDate > deadlineLimit) continue;  // 这笔赶不上 deadline，跳过
           wDate = fitToWindow(wDate);
+          if (wDate > deadlineLimit) continue;  // 塞窗口后超线也跳过
           const wKey = src.card.id + '|' + fmtDate(wDate);
           const cnt = dailyCount[wKey] || 0;
           const channel = cnt >= DAILY_LIMIT ? 'B' : 'A';
@@ -1058,13 +1064,14 @@
           loopWithdrawn += take;
           cardAvailable[src.card.id] -= take;
           cardCycleWithdraw[src.card.id] += take;
-          totalWithdrawn += take;
+          totalWithdraw += take;
           totalCost += take * FEE_RATE;
           dailyCount[wKey] = cnt + 1;
+          lastWd = wDate;
 
           const tag = src.isSelf
             ? ('自取·轮' + (loop + 1) + '·渠' + channel)
-            : ('源' + src.card.name + '·静置' + silence + 'h');
+            : ('源' + src.card.name + '·渠' + channel);
           withdrawals.push({
             date: wDate, action: 'withdraw', cardId: src.card.id,
             cardName: src.card.name, amount: take, channel: tag,
@@ -1072,41 +1079,45 @@
           });
         }
 
-        if (loopWithdrawn === 0) break;
-        loopCash += loopWithdrawn;  // 虚拟资金池加取现
+        if (loopWithdrawn === 0 && loopCash <= 0) break;
+        loopCash += loopWithdrawn;
 
-        // 立即还入目标卡（用虚拟资金池的钱）
+        // 立即还入目标卡（本轮取到的 + 手头现金）
         const payThisRound = Math.min(payAmount - alreadyPaid, loopCash);
-        if (payThisRound <= 0) continue;
+        if (payThisRound <= 0) break;
         loopCash -= payThisRound;
         alreadyPaid += payThisRound;
         cardAvailable[card.id] += payThisRound;
-        virtualRepay.setDate(virtualRepay.getDate() + 1);  // 每轮+1天
-        cardLastRepay[card.id] = new Date(virtualRepay);    // 让后续轮次从这里算静置
+
+        // 本轮还款时间：最后一笔取现 + 6h（塞进窗口）；纯现金轮 = task.date 15:00
+        let roundPayDate;
+        if (lastWd) {
+          roundPayDate = fitToWindow(new Date(lastWd.getTime() + silence * 3600 * 1000));
+        } else {
+          roundPayDate = new Date(task.date); roundPayDate.setHours(15, 0, 0, 0);
+        }
+        cardLastRepay[card.id] = new Date(roundPayDate);
+        roundPays.push({ date: roundPayDate, amount: payThisRound });
       }
 
       withdrawals.forEach(w => schedule.push(w));
 
-      // 最终：真实扣减 cash（真实现金），alreadyPaid = 循环累计还入
+      // 结算：每轮还款作为独立任务展示（真实反映操作节奏）
       const payNow = alreadyPaid;
       const payLater = payAmount - payNow;
-
-      const payDate = new Date(task.date); payDate.setHours(15, 0, 0, 0);
-      if (payNow > 0) {
-        cash -= payNow;
-        cardAvailable[card.id] += payNow;
-        cardLastRepay[card.id] = new Date(task.date);
-        cardCycleWithdraw[card.id] = 0;  // 还完重置周期跟踪
-
-        const noteExtra = payLater > 0 ? ` · 剩${Math.round(payLater)}滚下期` : '';
-        const graceExtra = enableGrace && task.date <= new Date() ? ' · 宽限期内' : '';
+      roundPays.forEach((rp, i) => {
+        const isLast = i === roundPays.length - 1;
+        const noteExtra = isLast && payLater > 0 ? ` · 剩${Math.round(payLater)}滚下期` : '';
         schedule.push({
-          date: payDate, action: 'pay', cardId: card.id,
-          cardName: card.name, amount: payNow, channel: '-',
-          status: payLater > 0 ? 'partial' : 'ok',
-          note: (task.isFirst ? '首期' : '循环') + ' · 取现补' + noteExtra + graceExtra
+          date: rp.date, action: 'pay', cardId: card.id,
+          cardName: card.name, amount: rp.amount, channel: '-',
+          status: isLast && payLater > 0 ? 'partial' : 'ok',
+          note: (task.isFirst ? '首期' : '循环') + ' · 轮' + (i + 1) + '还款' + noteExtra
         });
-      }
+      });
+      // 真实现金 = 循环结束后的资金池余额
+      cash = loopCash;
+      cardCycleWithdraw[card.id] = 0;
       // 没还的部分滚入 firstRemain，下期继续
       cardFirstRemain[card.id] += payLater;
     }
