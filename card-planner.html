@@ -897,7 +897,8 @@
       while (loopDue <= horizon) {
         let actualDate = loopDue;
         if (enableGrace) actualDate = new Date(loopDue.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
-        tasks.push({ date: new Date(actualDate), card: c, payAmount: c.totalLimit, isFirst: false });
+        // 循环账单金额 = 动态计算（模拟时根据该卡上一个周期的累计取现确定）
+        tasks.push({ date: new Date(actualDate), card: c, payAmount: null, isFirst: false });
         month++;
         if (month > 11) { month = 0; year++; }
         loopDue = new Date(year, month, c.dueDay);
@@ -931,10 +932,19 @@
     tasks.sort((a, b) => a.date - b.date);
 
     // 2. 模拟
+    // 额度流转规则：
+    //   - 取现: avail -= take
+    //   - 还入: avail += payAmount（只恢复还入的那部分，不是恢复到总额度！）
+    //   - 循环账单金额 = 上一个周期从该卡累计取走的金额（取多少还多少）
     let cash = cashX;
     const cardAvailable = {};
     const cardLastRepay = {};
-    cards.forEach(c => { cardAvailable[c.id] = c.currentLimit; });
+    // 跟踪每张卡上一个周期的累计取现（决定下一个循环账单金额）
+    const cardCycleWithdraw = {};
+    cards.forEach(c => {
+      cardAvailable[c.id] = c.currentLimit;
+      cardCycleWithdraw[c.id] = 0;
+    });
     const dailyCount = {};
     const schedule = [];
     let totalWithdraw = 0;
@@ -954,13 +964,27 @@
 
     for (const task of tasks) {
       const card = task.card;
-      const payAmount = task.payAmount;
+      // 循环账单：动态取该卡上一周期的累计取现额（取多少还多少）
+      // 如果上一周期取现额为 0（比如该卡首期还完后就没被源卡取过），
+      // 则设为该卡当前可用额度（让循环链保持运转）
+      let payAmount = task.payAmount;
+      if (payAmount === null) {
+        const cycleAmt = cardCycleWithdraw[card.id] || 0;
+        const availAmt = cardAvailable[card.id] || 0;
+        // 取 cycleAmt 和 availAmt 中较小的值（不会超过可用）
+        // 如果 cycleAmt = 0，说明上一周期没人从这张卡取过 → 不生成循环账单
+        // 但为了让循环链运转，我们取 min(availAmt, totalLimit * 0.3)
+        payAmount = Math.max(MIN_WITHDRAW, Math.min(cycleAmt || availAmt, availAmt, card.totalLimit * 0.3));
+        if (payAmount > card.totalLimit) payAmount = card.totalLimit;
+      }
 
       // 情况 A：现金够 → 直接还，零磨损
       if (cash >= payAmount) {
         cash -= payAmount;
-        cardAvailable[card.id] = card.totalLimit;
+        cardAvailable[card.id] += payAmount;  // 恢复还入的额度（不是总额度！）
         cardLastRepay[card.id] = new Date(task.date);
+        // 还完后重置该卡的周期取现跟踪（下一轮开始累积新的取现额）
+        cardCycleWithdraw[card.id] = 0;
         savedByCash += payAmount * FEE_RATE;
         const payDate = new Date(task.date);
         payDate.setHours(15, 0, 0, 0); // 明确时间，排在同天取现（10:00）之后
@@ -1026,6 +1050,7 @@
 
         withdrawn += take;
         cardAvailable[src.card.id] -= take;
+        cardCycleWithdraw[src.card.id] += take;  // 累加到源卡的周期取现
         totalWithdraw += take;
         totalCost += take * FEE_RATE;
         dailyCount[wKey] = cnt + 1;
@@ -1046,8 +1071,10 @@
       payDate.setHours(15, 0, 0, 0); // 统一 15:00 还款，排在同天取现（10:00）之后
       if (withdrawn >= shortfall) {
         cash += withdrawn - payAmount;
-        cardAvailable[card.id] = card.totalLimit;
+        cardAvailable[card.id] += payAmount;  // 恢复还入的额度（不是总额度！）
         cardLastRepay[card.id] = new Date(task.date);
+        // 还完后重置该卡的周期取现跟踪
+        cardCycleWithdraw[card.id] = 0;
         const noteExtra = enableGrace && task.date <= new Date() ? ' · 宽限期内' : '';
         schedule.push({
           date: payDate, action: 'pay', cardId: card.id,
