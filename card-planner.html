@@ -275,7 +275,7 @@
   }
   .card-fields {
     display: grid;
-    grid-template-columns: 1.3fr 0.7fr 0.7fr 0.55fr 0.55fr;
+    grid-template-columns: 1.3fr 0.7fr 0.7fr 0.7fr 0.55fr 0.55fr;
     gap: 6px;
   }
   .card-fields .field:last-child { padding-right: 0; }
@@ -762,15 +762,14 @@
     } catch(e) {}
     if (state.cards.length === 0) {
       state.cards = [
-        { id: uid(), name: '招行', totalLimit: 30000, currentLimit: 5000, billDay: 5, dueDay: 25 },
-        { id: uid(), name: '中信', totalLimit: 50000, currentLimit: 12000, billDay: 12, dueDay: 1 },
+        { id: uid(), name: '招行', totalLimit: 30000, currentLimit: 5000, billDay: 5, dueDay: 25, firstBill: 25000 },
+        { id: uid(), name: '中信', totalLimit: 50000, currentLimit: 12000, billDay: 12, dueDay: 1, firstBill: 38000 },
       ];
     }
   }
-  // 兼容旧数据：把 limit 迁移成 totalLimit + currentLimit
+  // 兼容旧数据
   function migrateCard(c) {
-    if (c.totalLimit !== undefined) return c;
-    return {
+    const base = c.totalLimit !== undefined ? c : {
       id: c.id || uid(),
       name: c.name || '新卡',
       totalLimit: c.limit || 0,
@@ -778,6 +777,11 @@
       billDay: c.billDay || 1,
       dueDay: c.dueDay || 1,
     };
+    // 迁移 firstBill：没有则从 (总额-现有) 推算
+    if (base.firstBill === undefined || base.firstBill === null) {
+      base.firstBill = Math.max(0, base.totalLimit - base.currentLimit);
+    }
+    return base;
   }
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -825,7 +829,11 @@
     // 1. 枚举所有还款任务
     const tasks = [];
     const initBill = {};
-    cards.forEach(c => { initBill[c.id] = Math.max(0, c.totalLimit - c.currentLimit); });
+    // 首期账单优先使用用户手动输入的 firstBill，未输入时回退到 (总额-现有)
+    cards.forEach(c => {
+      const fb = c.firstBill !== undefined && c.firstBill !== null ? c.firstBill : Math.max(0, c.totalLimit - c.currentLimit);
+      initBill[c.id] = Math.max(0, fb);
+    });
     cards.forEach(c => {
       // 首个还款日：从今天之后第一个 dueDay；启用宽限期则顺延 GRACE_DAYS 天
       let d = nextDueDate(today, c.dueDay);
@@ -997,6 +1005,11 @@
     const wrap = document.getElementById('cardList');
     wrap.innerHTML = '';
     state.cards.forEach(card => {
+      // 判断 firstBill 是自动还是手动
+      const autoBill = Math.max(0, card.totalLimit - card.currentLimit);
+      const isManual = card.firstBill !== undefined && card.firstBill !== null && parseInt(card.firstBill) !== autoBill;
+      const fbValue = card.firstBill !== undefined && card.firstBill !== null ? card.firstBill : autoBill;
+
       const item = document.createElement('div');
       item.className = 'card-item';
       item.innerHTML = `
@@ -1014,6 +1027,10 @@
             <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="currentLimit" value="${card.currentLimit}" min="0">
           </div>
           <div class="field">
+            <span class="field-label">首期账单 <span style="color:${isManual?'var(--accent)':'var(--text-3)'};font-size:10px;">${isManual?'手动':'自动'}</span></span>
+            <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="firstBill" value="${fbValue}" min="0" placeholder="留空自动算">
+          </div>
+          <div class="field">
             <span class="field-label">账单日</span>
             <input class="field-input num" type="number" inputmode="numeric" data-id="${card.id}" data-k="billDay" value="${card.billDay}" min="1" max="31">
           </div>
@@ -1025,12 +1042,12 @@
         <button class="del-btn" data-del="${card.id}" aria-label="删除">×</button>
       `;
       wrap.appendChild(item);
-      // 顶部展示下月账单 = 总额度 - 现有额度，并提示账单日次日
-      const bill = Math.max(0, card.totalLimit - card.currentLimit);
+      // 底部提示条
       const billTag = document.createElement('div');
       billTag.style.cssText = 'grid-column: 1 / -1; font-size: 12px; color: var(--text-3); padding-top: 6px; border-top: 1px dashed var(--border); margin-top: 4px; display: flex; flex-direction: column; gap: 2px;';
+      const autoHint = isManual ? `手动输入，自动算为 ${fmtMoneyStatic(autoBill)}` : `未输入时自动用 (总额 - 现有)`;
       billTag.innerHTML = `
-        <span>下月账单 ≈ <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(bill)}</span>（总额 - 现有）</span>
+        <span>首期账单 <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(fbValue)}</span>（${isManual?'手动输入':'自动'} · ${autoHint}）</span>
         <span style="color: var(--text-muted);">账单日（${card.billDay}号）次日大额消费，免息期最长 50-56 天</span>
       `;
       item.appendChild(billTag);
@@ -1042,20 +1059,30 @@
         const k = e.target.dataset.k;
         const card = state.cards.find(c => c.id === id);
         if (!card) return;
-        if (k === 'totalLimit' || k === 'currentLimit' || k === 'billDay' || k === 'dueDay') {
-          card[k] = parseInt(e.target.value) || 0;
+        if (k === 'totalLimit' || k === 'currentLimit' || k === 'billDay' || k === 'dueDay' || k === 'firstBill') {
+          const v = parseInt(e.target.value);
+          card[k] = isNaN(v) ? 0 : v;
         } else {
           card[k] = e.target.value;
         }
         save();
-        // 实时更新下月账单标签
-        const item = e.target.closest('.card-item');
-        if (item) {
-          const tag = item.querySelector('div[style*="grid-column: 1 / -1"]');
+        // 实时刷新该卡片的底部提示 + 首期账单的"自动/手动"标签
+        const cardItem = e.target.closest('.card-item');
+        if (cardItem) {
+          const autoBill = Math.max(0, card.totalLimit - card.currentLimit);
+          const isManual = card.firstBill !== undefined && card.firstBill !== null && parseInt(card.firstBill) !== autoBill && e.target.value !== '';
+          const fbValue = card.firstBill !== undefined && card.firstBill !== null && card.firstBill !== '' ? card.firstBill : autoBill;
+          // 更新"首期账单"字段 label 里的自动/手动 tag
+          const fbLabel = cardItem.querySelector('[data-k="firstBill"]').previousElementSibling;
+          if (fbLabel) {
+            fbLabel.innerHTML = `首期账单 <span style="color:${isManual?'var(--accent)':'var(--text-3)'};font-size:10px;">${isManual?'手动':'自动'}</span>`;
+          }
+          // 更新底部提示
+          const tag = cardItem.querySelector('div[style*="grid-column: 1 / -1"]');
           if (tag) {
-            const bill = Math.max(0, card.totalLimit - card.currentLimit);
+            const autoHint = isManual ? `手动输入，自动算为 ${fmtMoneyStatic(autoBill)}` : `未输入时自动用 (总额 - 现有)`;
             tag.innerHTML = `
-              <span>下月账单 ≈ <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(bill)}</span>（总额 - 现有）</span>
+              <span>首期账单 <span style="color: var(--accent); font-family: var(--mono); font-weight: 600;">${fmtMoneyStatic(fbValue)}</span>（${isManual?'手动输入':'自动'} · ${autoHint}）</span>
               <span style="color: var(--text-muted);">账单日（${card.billDay}号）次日大额消费，免息期最长 50-56 天</span>
             `;
           }
@@ -1289,7 +1316,7 @@
     updateStaggerBtn();
   });
   document.getElementById('addCardBtn').addEventListener('click', () => {
-    state.cards.push({ id: uid(), name: '新卡', totalLimit: 0, currentLimit: 0, billDay: 1, dueDay: 1 });
+    state.cards.push({ id: uid(), name: '新卡', totalLimit: 0, currentLimit: 0, billDay: 1, dueDay: 1, firstBill: 0 });
     save();
     renderCards();
     updateStaggerBtn();
@@ -1297,7 +1324,9 @@
 
   // ---------- 错峰检测 ----------
   function firstBillSum() {
-    return state.cards.reduce((s, c) => s + Math.max(0, c.totalLimit - c.currentLimit), 0);
+    return state.cards.reduce((s, c) => s + Math.max(0,
+      c.firstBill !== undefined && c.firstBill !== null && c.firstBill !== '' ? parseInt(c.firstBill) || 0 : (c.totalLimit - c.currentLimit)
+    ), 0);
   }
   // 现金够覆盖首期账单总和 → 视为"资金充足"，显示错峰按钮
   function updateStaggerBtn() {
