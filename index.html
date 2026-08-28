@@ -349,6 +349,24 @@
   .summary-value { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--text-1); letter-spacing: -0.01em; }
   .summary-value.cost { color: var(--accent); }
   .summary-value.risk { color: var(--danger); }
+
+  /* 月度明细小卡片 */
+  .mo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .mo-summary {
+    background: #fafafa;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+  .mo-header { font-size: 12px; font-weight: 600; color: var(--text-1); margin-bottom: 4px; }
+  .mo-row { display: flex; justify-content: space-between; color: var(--text-2); padding: 1px 0; }
+  .mo-row b { font-family: var(--mono); font-size: 11px; color: var(--text-1); }
+  .mo-row b.cost { color: var(--accent); }
   /* Month tabs */
   .month-tabs {
     margin-top: 20px;
@@ -844,15 +862,16 @@
     // 危险模式：静置期 24h → 6h，放宽风控约束
     const silence = dangerMode ? 6 : silence;
     // 1. 枚举所有还款任务
+    // 策略：先收集所有首期账单，按现金可覆盖优先排序（让能恢复额度的先还），
+    //      再收集循环账单（按 dueDay 正常排序），最后合并。
     const tasks = [];
+    const firstTasks = [];  // 首期账单单独处理
     const initBill = {};
-    // 首期账单优先使用用户手动输入的 firstBill，未输入时回退到 (总额-现有)
     cards.forEach(c => {
       const fb = c.firstBill !== undefined && c.firstBill !== null ? c.firstBill : Math.max(0, c.totalLimit - c.currentLimit);
       initBill[c.id] = Math.max(0, fb);
     });
     cards.forEach(c => {
-      // 每月独立计算 dueDay + 宽限，宽限期不累积
       let year = tMid.getFullYear();
       let month = tMid.getMonth();
       let due = new Date(year, month, c.dueDay);
@@ -861,18 +880,54 @@
         if (month > 11) { month = 0; year++; }
         due = new Date(year, month, c.dueDay);
       }
-      let isFirst = true;
-      while (due <= horizon) {
-        let actualDate = due;
-        if (enableGrace) actualDate = new Date(due.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
-        const payAmount = isFirst ? initBill[c.id] : c.totalLimit;
-        tasks.push({ date: new Date(actualDate), card: c, payAmount, isFirst });
+      // 首期任务：最早可还日 = tMid（今天就能提前还），最晚 = dueDay + 宽限
+      const firstDue = enableGrace ? new Date(due.getTime() + GRACE_DAYS * 24 * 3600 * 1000) : due;
+      firstTasks.push({
+        card: c, payAmount: initBill[c.id], isFirst: true,
+        // 首期 dueDay 用 dueDay 本身（不加宽限）作为排序参考
+        dueRef: new Date(due),
+        earliest: new Date(tMid),
+        deadline: new Date(firstDue),
+      });
+      // 循环任务（非首期）按正常 dueDay + 宽限排
+      let isFirst = false;
+      month++;
+      if (month > 11) { month = 0; year++; }
+      let loopDue = new Date(year, month, c.dueDay);
+      while (loopDue <= horizon) {
+        let actualDate = loopDue;
+        if (enableGrace) actualDate = new Date(loopDue.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
+        tasks.push({ date: new Date(actualDate), card: c, payAmount: c.totalLimit, isFirst: false });
         month++;
         if (month > 11) { month = 0; year++; }
-        due = new Date(year, month, c.dueDay);
+        loopDue = new Date(year, month, c.dueDay);
         isFirst = false;
       }
     });
+
+    // 首期任务排序：现金能直接覆盖的优先（让源卡先恢复额度），再按截止日期先后
+    firstTasks.sort((a, b) => {
+      const aOk = cashX >= a.payAmount;
+      const bOk = cashX >= b.payAmount;
+      if (aOk !== bOk) return aOk ? -1 : 1;  // 能现金还的排前面
+      return a.deadline - b.deadline;          // 同条件下按截止日期
+    });
+    // 给首期任务分配实际执行日期：
+    // - 现金能覆盖的 → 立即排 today（允许提前还，让源卡尽早恢复额度）
+    // - 现金不够的   → 排 deadline（宽限最后一天），期待前面的卡已恢复额度
+    let cursor = new Date(tMid);
+    firstTasks.forEach(ft => {
+      let execDate;
+      if (cashX >= ft.payAmount) {
+        // 现金够 → 排今天（允许提前还），但不能早于 earliest
+        execDate = new Date(Math.max(cursor.getTime(), ft.earliest.getTime()));
+      } else {
+        // 现金不够 → 排 deadline（宽限期最后），等其他卡先恢复额度
+        execDate = new Date(ft.deadline);
+      }
+      tasks.push({ date: execDate, card: ft.card, payAmount: ft.payAmount, isFirst: true });
+    });
+
     tasks.sort((a, b) => a.date - b.date);
 
     // 2. 模拟
@@ -1013,14 +1068,21 @@
       }
     }
 
-    // 3. 按月分组
+    // 3. 按月分组 + 每月统计
     const byMonth = {};
     schedule.forEach(t => {
       const m = fmtMonth(t.date);
-      if (!byMonth[m]) byMonth[m] = [];
-      byMonth[m].push(t);
+      if (!byMonth[m]) byMonth[m] = { items: [], pay: 0, withdraw: 0, fee: 0, risk: 0 };
+      byMonth[m].items.push(t);
+      if (t.action === 'pay') {
+        byMonth[m].pay += t.amount;
+        if (t.status !== 'ok') byMonth[m].risk++;
+      } else if (t.action === 'withdraw') {
+        byMonth[m].withdraw += t.amount;
+        byMonth[m].fee += t.amount * FEE_RATE;
+      }
     });
-    Object.values(byMonth).forEach(arr => arr.sort((a, b) => a.date - b.date));
+    Object.values(byMonth).forEach(mo => mo.items.sort((a, b) => a.date - b.date));
 
     return {
       schedule, totalCost, totalWithdraw, savedByCash,
@@ -1166,39 +1228,45 @@
     }
     summaryWrap.insertBefore(tipBar, summaryWrap.firstChild);
 
-    // 汇总
+    // 汇总卡：去掉"总还款"，改成月度小卡片
     const coverCount = new Set(schedule.map(t => t.cardId)).size;
-    const totalPay = schedule.filter(t => t.action === 'pay' && t.status === 'ok')
-                            .reduce((s, t) => s + t.amount, 0);
+    const months = Object.keys(byMonth).sort();
+
+    let monthlyHtml = '';
+    months.forEach(m => {
+      const mo = byMonth[m];
+      const d = new Date(m + '-01');
+      const label = (d.getMonth() + 1) + '月';
+      const riskTag = mo.risk > 0 ? `<span style="color:#dc2626;font-size:11px;">⚠${mo.risk}</span>` : '';
+      monthlyHtml += `
+        <div class="mo-summary">
+          <div class="mo-header"><b>${label}</b> ${riskTag}</div>
+          <div class="mo-row"><span>还款</span><b>${fmtMoney(mo.pay)}</b></div>
+          <div class="mo-row"><span>取现</span><b>${fmtMoney(mo.withdraw)}</b></div>
+          <div class="mo-row"><span>手续费</span><b class="cost">${fmtMoney(mo.fee)}</b></div>
+        </div>`;
+    });
+
     document.getElementById('planSummary').innerHTML = `
-      <div class="summary-item">
-        <span class="summary-label">总还款</span>
-        <span class="summary-value">${fmtMoney(totalPay)}</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">取现金额</span>
-        <span class="summary-value">${fmtMoney(totalWithdraw)}</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">手续费</span>
-        <span class="summary-value cost">${fmtMoney(totalCost)}</span>
-      </div>
-      <div class="summary-item">
-        <span class="summary-label">省下磨损</span>
-        <span class="summary-value" style="color: var(--success);">${fmtMoney(savedByCash)}</span>
-      </div>
       <div class="summary-item" style="grid-column: span 2;">
         <span class="summary-label">剩余现金</span>
         <span class="summary-value">${fmtMoney(finalCash)}</span>
       </div>
-      <div class="summary-item" style="grid-column: span 2;">
+      <div class="summary-item">
+        <span class="summary-label">总手续费</span>
+        <span class="summary-value cost">${fmtMoney(totalCost)}</span>
+      </div>
+      <div class="summary-item">
         <span class="summary-label">覆盖卡数</span>
         <span class="summary-value">${coverCount}</span>
+      </div>
+      <div style="grid-column: span 4; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;">📅 每月明细</div>
+        <div class="mo-grid">${monthlyHtml}</div>
       </div>
     `;
 
     // 月份 tab
-    const months = Object.keys(byMonth).sort();
     if (!state.activeMonth || !byMonth[state.activeMonth]) {
       state.activeMonth = months[0];
     }
@@ -1208,7 +1276,8 @@
       const btn = document.createElement('button');
       btn.className = 'month-tab' + (m === state.activeMonth ? ' active' : '');
       const d = new Date(m + '-01');
-      btn.textContent = monthLabel(d) + ' · ' + byMonth[m].length + '项';
+      const mo = byMonth[m];
+      btn.textContent = monthLabel(d) + ' · ' + mo.items.length + '项';
       btn.addEventListener('click', () => {
         state.activeMonth = m;
         renderPlan();
@@ -1218,7 +1287,7 @@
 
     // 时间线
     const tl = document.getElementById('timeline');
-    const tasks = byMonth[state.activeMonth] || [];
+    const tasks = (byMonth[state.activeMonth] && byMonth[state.activeMonth].items) || [];
     if (tasks.length === 0) {
       tl.innerHTML = '<div class="empty">本月无任务</div>';
       return;
