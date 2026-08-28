@@ -1036,7 +1036,7 @@
           cardName: src.card.name, amount: take,
           channel: tag,
           status: 'ok',
-          note: src.isSelf ? '自身可用额度补足缺口' : '补足缺口'
+          note: src.isSelf ? '自身可用额度循环' : '源卡循环'
         });
       }
 
@@ -1061,8 +1061,8 @@
           date: payDate, action: 'pay', cardId: card.id,
           cardName: card.name, amount: payAmount, channel: '-',
           status: 'risk',
-          note: '资金不足 · 仍缺 ' + Math.round(remaining) + ' 元' +
-                (enableGrace ? '' : ' · 可开启宽限期再试')
+          note: '循环链未覆盖' +
+                (enableGrace ? '' : ' · 建议开启宽限期延后')
         });
         riskCount++;
       }
@@ -1207,7 +1207,7 @@
     summaryWrap.style.display = 'block';
     const { totalCost, totalWithdraw, savedByCash, finalCash, byMonth, schedule, riskCount } = state.plan;
 
-    // 自动循环取现补足 — 不推"补资金"，只展示状态说明条
+    // 循环链状态条 — 不提任何"补资金"，只陈述循环覆盖状态
     const tip = document.getElementById('autoLoopTip');
     if (tip) tip.remove();
     const tipBar = document.createElement('div');
@@ -1219,12 +1219,12 @@
       tipBar.style.background = 'var(--success-soft, #effaf3)';
       tipBar.style.border = '1px solid #bfe3cc';
       tipBar.style.color = 'var(--success, #2e7d55)';
-      tipBar.innerHTML = `✅ 循环取现已全额覆盖所有账单（源卡静置 ${silenceLabel}）。本次现金直接还贷 <b>${fmtMoney(savedByCash / 0.00056)}</b> 省磨损，其余由卡间循环。`;
+      tipBar.innerHTML = `✅ 循环链已跑通 · 所有账单由卡间循环覆盖（源卡静置 ${silenceLabel}）。`;
     } else {
       tipBar.style.background = '#fff7ed';
       tipBar.style.border = '1px solid #fed7aa';
       tipBar.style.color = '#c2410c';
-      tipBar.innerHTML = `⚠ 循环取现仍有 <b>${riskCount} 笔</b> 无法覆盖（源卡可用额度耗尽或静置冲突）。可尝试开启 <b>危险模式</b>（静置 6h）或 <b>3 天宽限期</b> 再生成一次。`;
+      tipBar.innerHTML = `⚠ 循环链仍有 <b>${riskCount} 笔</b> 未能覆盖。可尝试开启 <b>3 天宽限期</b> 延后首期账单，让源卡先恢复额度再循环补上。`;
     }
     summaryWrap.insertBefore(tipBar, summaryWrap.firstChild);
 
@@ -1343,7 +1343,7 @@
       lines.push('DTSTART:' + icsTime(start));
       lines.push('DTEND:' + icsTime(end));
       const action = t.action === 'pay' ? '还款' : '取现';
-      const riskTag = t.status === 'risk' ? ' [资金不足]' : '';
+      const riskTag = t.status === 'risk' ? ' [循环链未覆盖]' : '';
       lines.push('SUMMARY:' + action + ' ' + t.cardName + ' ' + fmtMoney(t.amount) + (t.channel !== '-' ? ' ' + t.channel : '') + riskTag);
       lines.push('DESCRIPTION:金额 ' + t.amount.toFixed(2) + ' 元' + (t.channel !== '-' ? '，渠道 ' + t.channel : '') + riskTag);
       lines.push('END:VEVENT');
@@ -1380,7 +1380,7 @@
     const lines = ['还款计划 · ' + fmtDate(new Date()), ''];
     state.plan.schedule.forEach(t => {
       const action = t.action === 'pay' ? '还款' : '取现';
-      const riskTag = t.status === 'risk' ? ' [资金不足]' : '';
+      const riskTag = t.status === 'risk' ? ' [循环链未覆盖]' : '';
       lines.push(fmtDate(t.date) + ' · ' + action + ' · ' + t.cardName + ' · ' + t.amount.toFixed(0) + ' 元' + (t.channel !== '-' ? ' · ' + t.channel : '') + riskTag);
     });
     lines.push('', '总手续费 ' + state.plan.totalCost.toFixed(2) + ' 元');
