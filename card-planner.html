@@ -933,17 +933,20 @@
 
     // 2. 模拟
     // 额度流转规则：
-    //   - 取现: avail -= take
-    //   - 还入: avail += payAmount（只恢复还入的那部分，不是恢复到总额度！）
-    //   - 循环账单金额 = 上一个周期从该卡累计取走的金额（取多少还多少）
+    //   - 取现: avail -= take (留 LEAVE 不动)
+    //   - 还入: avail += payNow（只恢复实际还入的那部分）
+    //   - 循环账单 = 上期 cycleWithdraw + 首期未还 firstRemain
+    //   - 还不起不报错！先部分还，剩余滚入 firstRemain 下期继续
     let cash = cashX;
     const cardAvailable = {};
     const cardLastRepay = {};
-    // 跟踪每张卡上一个周期的累计取现（决定下一个循环账单金额）
-    const cardCycleWithdraw = {};
+    const cardCycleWithdraw = {};  // 上一个周期从该卡累计取走的金额
+    const cardFirstRemain = {};    // 首期/上期未还余额，滚入循环
+    const LEAVE = 50;              // 取现留底不动
     cards.forEach(c => {
       cardAvailable[c.id] = c.currentLimit;
       cardCycleWithdraw[c.id] = 0;
+      cardFirstRemain[c.id] = 0;
     });
     const dailyCount = {};
     const schedule = [];
@@ -964,30 +967,28 @@
 
     for (const task of tasks) {
       const card = task.card;
-      // 循环账单：动态取该卡上一周期的累计取现额（取多少还多少）
-      // 如果上一周期取现额为 0（比如该卡首期还完后就没被源卡取过），
-      // 则设为该卡当前可用额度（让循环链保持运转）
+      // 循环账单 = 上期从该卡取走的 + 之前没还完滚下来的
       let payAmount = task.payAmount;
       if (payAmount === null) {
         const cycleAmt = cardCycleWithdraw[card.id] || 0;
+        const remainAmt = cardFirstRemain[card.id] || 0;
         const availAmt = cardAvailable[card.id] || 0;
-        // 取 cycleAmt 和 availAmt 中较小的值（不会超过可用）
-        // 如果 cycleAmt = 0，说明上一周期没人从这张卡取过 → 不生成循环账单
-        // 但为了让循环链运转，我们取 min(availAmt, totalLimit * 0.3)
-        payAmount = Math.max(MIN_WITHDRAW, Math.min(cycleAmt || availAmt, availAmt, card.totalLimit * 0.3));
+        payAmount = Math.max(MIN_WITHDRAW, Math.min(cycleAmt + remainAmt, availAmt, card.totalLimit * 0.3));
         if (payAmount > card.totalLimit) payAmount = card.totalLimit;
       }
+      // 没人欠这张卡（payAmount=0），跳过
+      if (!payAmount || payAmount <= 0) continue;
 
-      // 情况 A：现金够 → 直接还，零磨损
+      // === 统一还入逻辑：算总共能凑多少（现金 + 源卡能取的），部分还，剩余滚 ===
+      // 1) 现金够直接全还，零磨损（还是保留这个优化）
       if (cash >= payAmount) {
         cash -= payAmount;
-        cardAvailable[card.id] += payAmount;  // 恢复还入的额度（不是总额度！）
+        cardAvailable[card.id] += payAmount;
         cardLastRepay[card.id] = new Date(task.date);
-        // 还完后重置该卡的周期取现跟踪（下一轮开始累积新的取现额）
         cardCycleWithdraw[card.id] = 0;
+        cardFirstRemain[card.id] = 0;  // 全还清了
         savedByCash += payAmount * FEE_RATE;
-        const payDate = new Date(task.date);
-        payDate.setHours(15, 0, 0, 0); // 明确时间，排在同天取现（10:00）之后
+        const payDate = new Date(task.date); payDate.setHours(15, 0, 0, 0);
         schedule.push({
           date: payDate, action: 'pay', cardId: card.id,
           cardName: card.name, amount: payAmount, channel: '-',
@@ -998,19 +999,23 @@
         continue;
       }
 
-      // 情况 B：现金不够 → 先从自身取（优先级最高），再从其他卡取
+      // 2) 现金不够 → 从源卡补（自身优先，然后其他卡按 avail 降序）
       const shortfall = payAmount - cash;
-
-      // 构造源卡列表：自身排最前（因为无静置约束），其余按可用额度降序
-      const selfAvailable = cardAvailable[card.id] || 0;
       const sources = [];
-      if (selfAvailable > 0) {
-        sources.push({ card, available: selfAvailable, lastRepay: null, isSelf: true });
+      // 自身可取（留 LEAVE）
+      const selfTakeable = Math.max(0, (cardAvailable[card.id] || 0) - LEAVE);
+      if (selfTakeable >= MIN_WITHDRAW) {
+        sources.push({ card, available: selfTakeable, lastRepay: null, isSelf: true });
       }
       cards
-        .filter(c => c.id !== card.id && cardAvailable[c.id] > 0)
-        .sort((a, b) => cardAvailable[b.id] - cardAvailable[a.id])
-        .forEach(c => sources.push({ card: c, available: cardAvailable[c.id], lastRepay: cardLastRepay[c.id], isSelf: false }));
+        .filter(c => c.id !== card.id)
+        .sort((a, b) => (cardAvailable[b.id] || 0) - (cardAvailable[a.id] || 0))
+        .forEach(c => {
+          const takeable = Math.max(0, (cardAvailable[c.id] || 0) - LEAVE);
+          if (takeable >= MIN_WITHDRAW) {
+            sources.push({ card: c, available: takeable, lastRepay: cardLastRepay[c.id], isSelf: false });
+          }
+        });
 
       let withdrawn = 0;
       const withdrawals = [];
@@ -1018,24 +1023,17 @@
         if (withdrawn >= shortfall) break;
         const need = shortfall - withdrawn;
         let take = Math.min(need, src.available);
-        // 规则：单笔取现不足 MIN_WITHDRAW 不值得折腾，跳过这个源
         if (take < MIN_WITHDRAW) continue;
 
         let wDate;
         if (src.isSelf) {
-          // 自身取现：在还款当天之前（上午 10 点），无需静置约束（还完后才进入静置期）
-          wDate = new Date(task.date);
-          wDate.setHours(10, 0, 0, 0);
-          // 如果今天已经过了还款日，则顺延到还款前一天
+          wDate = new Date(task.date); wDate.setHours(10, 0, 0, 0);
           const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
-          if (wDate > todayNoon) {
-            // 还款日还没到，取现在还款当天没问题
-          } else {
+          if (wDate <= todayNoon) {
             wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
             wDate.setHours(10, 0, 0, 0);
           }
         } else {
-          // 其他卡源：必须在还款日前，且满足静置期
           wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
           wDate.setHours(10, 0, 0, 0);
           if (src.lastRepay) {
@@ -1050,49 +1048,46 @@
 
         withdrawn += take;
         cardAvailable[src.card.id] -= take;
-        cardCycleWithdraw[src.card.id] += take;  // 累加到源卡的周期取现
+        cardCycleWithdraw[src.card.id] += take;
         totalWithdraw += take;
         totalCost += take * FEE_RATE;
         dailyCount[wKey] = cnt + 1;
 
-        const tag = src.isSelf ? '自取现' : ('渠道' + channel + ' · 静置' + silence + 'h');
+        const tag = src.isSelf ? '自取' : ('渠道' + channel + ' · 静置' + silence + 'h');
         withdrawals.push({
           date: wDate, action: 'withdraw', cardId: src.card.id,
-          cardName: src.card.name, amount: take,
-          channel: tag,
+          cardName: src.card.name, amount: take, channel: tag,
           status: 'ok',
-          note: src.isSelf ? '自身可用额度循环' : '源卡循环'
+          note: src.isSelf ? '自身额度循环' : '源卡循环'
         });
       }
-
       withdrawals.forEach(w => schedule.push(w));
 
-      const payDate = new Date(task.date);
-      payDate.setHours(15, 0, 0, 0); // 统一 15:00 还款，排在同天取现（10:00）之后
-      if (withdrawn >= shortfall) {
-        cash += withdrawn - payAmount;
-        cardAvailable[card.id] += payAmount;  // 恢复还入的额度（不是总额度！）
+      // === 核心：部分还，剩余滚 ===
+      // 取到的钱先回到现金池
+      cash += withdrawn;
+      // 然后算能还多少（现金池里所有的，但不超过 payAmount）
+      const payNow = Math.min(payAmount, cash);
+      const payLater = payAmount - payNow;   // 没还的部分滚入 firstRemain
+
+      const payDate = new Date(task.date); payDate.setHours(15, 0, 0, 0);
+      if (payNow > 0) {
+        cash -= payNow;
+        cardAvailable[card.id] += payNow;
         cardLastRepay[card.id] = new Date(task.date);
-        // 还完后重置该卡的周期取现跟踪
-        cardCycleWithdraw[card.id] = 0;
-        const noteExtra = enableGrace && task.date <= new Date() ? ' · 宽限期内' : '';
+        cardCycleWithdraw[card.id] = 0;  // 还完重置周期跟踪
+
+        const noteExtra = payLater > 0 ? ` · 剩${Math.round(payLater)}滚下期` : '';
+        const graceExtra = enableGrace && task.date <= new Date() ? ' · 宽限期内' : '';
         schedule.push({
           date: payDate, action: 'pay', cardId: card.id,
-          cardName: card.name, amount: payAmount, channel: '-',
-          status: 'ok',
-          note: (task.isFirst ? '首期账单 · 取现补足' : '取现补足 · 含磨损') + noteExtra
+          cardName: card.name, amount: payNow, channel: '-',
+          status: payLater > 0 ? 'partial' : 'ok',
+          note: (task.isFirst ? '首期' : '循环') + ' · 取现补' + noteExtra + graceExtra
         });
-      } else {
-        const remaining = shortfall - withdrawn;
-        schedule.push({
-          date: payDate, action: 'pay', cardId: card.id,
-          cardName: card.name, amount: payAmount, channel: '-',
-          status: 'risk',
-          note: '循环链未覆盖' +
-                (enableGrace ? '' : ' · 建议开启宽限期延后')
-        });
-        riskCount++;
       }
+      // 没还的部分滚入 firstRemain，下期继续
+      cardFirstRemain[card.id] += payLater;
     }
 
     // 3. 按月分组 + 每月统计
@@ -1103,7 +1098,8 @@
       byMonth[m].items.push(t);
       if (t.action === 'pay') {
         byMonth[m].pay += t.amount;
-        if (t.status !== 'ok') byMonth[m].risk++;
+        // partial 不算 risk（循环中正常部分还），只有 status='risk' 才是真风险
+        if (t.status === 'risk') byMonth[m].risk++;
       } else if (t.action === 'withdraw') {
         byMonth[m].withdraw += t.amount;
         byMonth[m].fee += t.amount * FEE_RATE;
@@ -1234,24 +1230,26 @@
     summaryWrap.style.display = 'block';
     const { totalCost, totalWithdraw, savedByCash, finalCash, byMonth, schedule, riskCount } = state.plan;
 
-    // 循环链状态条 — 不提任何"补资金"，只陈述循环覆盖状态
+    // 循环链状态条 — 永远跑通，显示部分还的详情
     const tip = document.getElementById('autoLoopTip');
     if (tip) tip.remove();
     const tipBar = document.createElement('div');
     tipBar.id = 'autoLoopTip';
-    const loopOk = riskCount === 0;
     const silenceLabel = state.dangerMode ? '6h' : '24h';
+    // 统计有多少笔是 partial（部分还）
+    const partialItems = schedule.filter(t => t.status === 'partial');
+    const partialTotal = partialItems.reduce((s, t) => s + t.amount, 0);
     tipBar.style.cssText = 'margin-bottom: 12px; border-radius: var(--radius-lg); padding: 12px 16px; font-size: 13px; line-height: 1.7;';
-    if (loopOk) {
+    if (partialItems.length === 0) {
       tipBar.style.background = 'var(--success-soft, #effaf3)';
       tipBar.style.border = '1px solid #bfe3cc';
       tipBar.style.color = 'var(--success, #2e7d55)';
-      tipBar.innerHTML = `✅ 循环链已跑通 · 所有账单由卡间循环覆盖（源卡静置 ${silenceLabel}）。`;
+      tipBar.innerHTML = `✅ 循环链已跑通 · 所有账单由现金 + 卡间循环完整覆盖（源卡静置 ${silenceLabel}，取现留 50 不动）。`;
     } else {
       tipBar.style.background = '#fff7ed';
       tipBar.style.border = '1px solid #fed7aa';
       tipBar.style.color = '#c2410c';
-      tipBar.innerHTML = `⚠ 循环链仍有 <b>${riskCount} 笔</b> 未能覆盖。可尝试开启 <b>3 天宽限期</b> 延后首期账单，让源卡先恢复额度再循环补上。`;
+      tipBar.innerHTML = `⚠ 循环链已跑通 · 共 <b>${partialItems.length} 笔</b> 为部分还款（已还 ${partialTotal.toFixed(0)} 元），未还部分已自动滚入下期循环账单。未来加现金可逐步还清（源卡静置 ${silenceLabel}，取现留 50）。`;
     }
     summaryWrap.insertBefore(tipBar, summaryWrap.firstChild);
 
