@@ -831,6 +831,7 @@
   //   3. 启用宽限期后所有还款日顺延 3 天
   // 强制规则：取现时间窗 9:00-22:00；其他卡源静置 ≥24h；单日单卡 ≤2 次，第 3 次切渠道 B
   const SILENCE_HOURS = 24;          // 还款后静置小时数
+  const MIN_WITHDRAW = 100;          // 单笔取现低于这个数不值得折腾，跳过
   const WINDOW_START = 9;            // 取现时间窗起点
   const WINDOW_END = 22;             // 取现时间窗终点（含）
   const GRACE_DAYS = 3;              // 银行容时宽限期天数
@@ -937,7 +938,9 @@
       for (const src of sources) {
         if (withdrawn >= shortfall) break;
         const need = shortfall - withdrawn;
-        const take = Math.min(need, src.available);
+        let take = Math.min(need, src.available);
+        // 规则：单笔取现不足 MIN_WITHDRAW 不值得折腾，跳过这个源
+        if (take < MIN_WITHDRAW) continue;
 
         let wDate;
         if (src.isSelf) {
