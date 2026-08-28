@@ -571,6 +571,46 @@
     .plan-summary { grid-template-columns: repeat(2, 1fr); }
     .summary-value { font-size: 16px; }
   }
+  /* 宽限期开关 */
+  .grace-toggle {
+    margin-top: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .grace-toggle.checked {
+    border-color: var(--brand);
+    background: var(--brand-soft);
+  }
+  .grace-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .grace-title { font-size: 14px; font-weight: 500; color: var(--text-1); }
+  .grace-desc { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+  .grace-switch {
+    flex-shrink: 0;
+    width: 44px; height: 26px;
+    border-radius: var(--radius-full);
+    background: var(--border-strong);
+    position: relative;
+    transition: background 0.2s;
+  }
+  .grace-switch::after {
+    content: '';
+    position: absolute;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    top: 2px; left: 2px;
+    transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .grace-toggle.checked .grace-switch { background: var(--brand); }
+  .grace-toggle.checked .grace-switch::after { transform: translateX(18px); }
 </style>
 </head>
 <body>
@@ -603,6 +643,15 @@
     <div class="card-list" id="cardList"></div>
     <div id="staggerHint" class="stagger-hint" style="display: none;"></div>
     <div id="staggerResult" style="display: none;"></div>
+  </div>
+
+  <!-- 宽限期开关 -->
+  <div class="grace-toggle" id="graceToggle">
+    <div class="grace-info">
+      <span class="grace-title">启用 3 天宽限期（银行容时）</span>
+      <span class="grace-desc">工行/建行/招行/交行等大部分银行自动给予 3 天宽限期，开启后所有还款日顺延 3 天；极端资金缺口时可多争取周转时间。部分银行需主动申请。</span>
+    </div>
+    <div class="grace-switch"></div>
   </div>
 
   <!-- 生成按钮 -->
@@ -664,7 +713,7 @@
   </details>
 
   <div class="footer-note">
-    规则：每次取现手续费 0.056%；同一张卡单日最多取现 2 次，第 3 次自动切换第二渠道（同费率）；还款日跨月按月滚动，默认生成未来 3 个月计划；现金充足时优先用现金还，零磨损；现金不足时从已还清卡取现补足，取现时间强制塞进 9-22 点且源卡静置 ≥24h。
+    规则：每次取现手续费 0.056%；同一张卡单日最多取现 2 次，第 3 次自动切换第二渠道（同费率）；还款日跨月按月滚动，默认生成未来 3 个月计划；现金充足时优先用现金还，零磨损；现金不足时优先从待还款卡自身取现补足（无需静置），再从其他已还清卡取现（源卡静置 ≥24h）；刷卡时间强制塞进 9:00-22:00。可开启 3 天宽限期（银行容时）顺延所有还款日。
   </div>
 
   <details class="shortcuts-guide" open>
@@ -698,6 +747,7 @@
     plan: null, // {schedule, totalCost, finalCash, byMonth}
     activeMonth: null,
     staggerDiag: null,
+    enableGrace: false,  // 启用银行容时宽限期（顺延 3 天）
   };
 
   function load() {
@@ -707,6 +757,7 @@
         const data = JSON.parse(raw);
         state.cash = data.cash || 0;
         state.cards = (data.cards || []).map(migrateCard);
+        state.enableGrace = !!data.enableGrace;
       }
     } catch(e) {}
     if (state.cards.length === 0) {
@@ -730,7 +781,7 @@
   }
   function save() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      cash: state.cash, cards: state.cards,
+      cash: state.cash, cards: state.cards, enableGrace: state.enableGrace,
     }));
   }
   function uid() { return 'c' + Math.random().toString(36).slice(2, 9); }
@@ -758,30 +809,33 @@
     return d;
   }
 
-  // ---------- 算法：循环还款模拟（V3 减磨损版） ----------
-  // 模型假设：每张卡每月需还金额 = 卡额度（账单满额）
-  // 核心优化：现金够时直接还、不取现 → 零磨损；现金不够才从已还清卡取现补足
-  // 强制规则：取现时间窗 9:00-22:00；源卡静置 ≥24h；单日单卡 ≤2 次，第 3 次切渠道 B
+  // ---------- 算法：循环还款模拟（V4 自取现+宽限期版） ----------
+  // 核心优化：
+  //   1. 现金够 → 直接还零磨损
+  //   2. 现金不够 → 先从待还款卡自身取现（优先级最高，无需静置），再从其他已还清卡取
+  //   3. 启用宽限期后所有还款日顺延 3 天
+  // 强制规则：取现时间窗 9:00-22:00；其他卡源静置 ≥24h；单日单卡 ≤2 次，第 3 次切渠道 B
   const SILENCE_HOURS = 24;          // 还款后静置小时数
   const WINDOW_START = 9;            // 取现时间窗起点
   const WINDOW_END = 22;             // 取现时间窗终点（含）
-  function generatePlan(cards, cashX, today) {
+  const GRACE_DAYS = 3;              // 银行容时宽限期天数
+
+  function generatePlan(cards, cashX, today, enableGrace) {
     const horizon = addMonths(today, MONTHS_HORIZON);
-    // 1. 枚举所有还款任务（每月账单 = 总额度 - 现有额度；还完后现有=总额）
+    // 1. 枚举所有还款任务
     const tasks = [];
-    // 初始每张卡的下月账单金额
     const initBill = {};
     cards.forEach(c => { initBill[c.id] = Math.max(0, c.totalLimit - c.currentLimit); });
     cards.forEach(c => {
-      // 首个还款日：从今天之后第一个 dueDay
+      // 首个还款日：从今天之后第一个 dueDay；启用宽限期则顺延 GRACE_DAYS 天
       let d = nextDueDate(today, c.dueDay);
+      if (enableGrace) d = new Date(d.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
       let isFirst = true;
       while (d <= horizon) {
-        // 第一期账单 = 当前已用额度（total - current）；后续每月账单假设=总额度（满额用满）
-        // 更真实：后续每月账单 = 总额度（持续满额用），但允许用户在"现有额度"输入框反映实际
         const payAmount = isFirst ? initBill[c.id] : c.totalLimit;
         tasks.push({ date: new Date(d), card: c, payAmount, isFirst });
         d = addMonths(d, 1);
+        if (enableGrace) d = new Date(d.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
         isFirst = false;
       }
     });
@@ -789,7 +843,6 @@
 
     // 2. 模拟
     let cash = cashX;
-    // 卡状态：available = 当前可用取现额度；初始 = currentLimit（用户输入的现有额度）
     const cardAvailable = {};
     const cardLastRepay = {};
     cards.forEach(c => { cardAvailable[c.id] = c.currentLimit; });
@@ -817,25 +870,34 @@
       // 情况 A：现金够 → 直接还，零磨损
       if (cash >= payAmount) {
         cash -= payAmount;
-        // 还款后该卡可用额度恢复到总额度
         cardAvailable[card.id] = card.totalLimit;
         cardLastRepay[card.id] = new Date(task.date);
         savedByCash += payAmount * FEE_RATE;
+        const payDate = new Date(task.date);
+        payDate.setHours(15, 0, 0, 0); // 明确时间，排在同天取现（10:00）之后
         schedule.push({
-          date: new Date(task.date), action: 'pay', cardId: card.id,
+          date: payDate, action: 'pay', cardId: card.id,
           cardName: card.name, amount: payAmount, channel: '-',
           status: 'ok',
-          note: task.isFirst ? '首期账单 · 现金还 · 零磨损' : '现金还 · 零磨损'
+          note: (task.isFirst ? '首期账单 · 现金还 · 零磨损' : '现金还 · 零磨损') +
+                (enableGrace && task.date <= new Date() ? ' · 宽限期内' : '')
         });
         continue;
       }
 
-      // 情况 B：现金不够 → 从已还清卡取现补足
+      // 情况 B：现金不够 → 先从自身取（优先级最高），再从其他卡取
       const shortfall = payAmount - cash;
-      const sources = cards
+
+      // 构造源卡列表：自身排最前（因为无静置约束），其余按可用额度降序
+      const selfAvailable = cardAvailable[card.id] || 0;
+      const sources = [];
+      if (selfAvailable > 0) {
+        sources.push({ card, available: selfAvailable, lastRepay: null, isSelf: true });
+      }
+      cards
         .filter(c => c.id !== card.id && cardAvailable[c.id] > 0)
-        .map(c => ({ card: c, available: cardAvailable[c.id], lastRepay: cardLastRepay[c.id] }))
-        .sort((a, b) => b.available - a.available);
+        .sort((a, b) => cardAvailable[b.id] - cardAvailable[a.id])
+        .forEach(c => sources.push({ card: c, available: cardAvailable[c.id], lastRepay: cardLastRepay[c.id], isSelf: false }));
 
       let withdrawn = 0;
       const withdrawals = [];
@@ -844,11 +906,27 @@
         const need = shortfall - withdrawn;
         const take = Math.min(need, src.available);
 
-        let wDate = new Date(task.date.getTime() - 24 * 60 * 60 * 1000);
-        wDate.setHours(10, 0, 0, 0);
-        if (src.lastRepay) {
-          const earliest = new Date(src.lastRepay.getTime() + SILENCE_HOURS * 3600 * 1000);
-          if (wDate < earliest) wDate = new Date(earliest);
+        let wDate;
+        if (src.isSelf) {
+          // 自身取现：在还款当天之前（上午 10 点），无需静置约束（还完后才进入静置期）
+          wDate = new Date(task.date);
+          wDate.setHours(10, 0, 0, 0);
+          // 如果今天已经过了还款日，则顺延到还款前一天
+          const todayNoon = new Date(); todayNoon.setHours(12, 0, 0, 0);
+          if (wDate > todayNoon) {
+            // 还款日还没到，取现在还款当天没问题
+          } else {
+            wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
+            wDate.setHours(10, 0, 0, 0);
+          }
+        } else {
+          // 其他卡源：必须在还款日前，且满足静置期
+          wDate = new Date(task.date.getTime() - 24 * 3600 * 1000);
+          wDate.setHours(10, 0, 0, 0);
+          if (src.lastRepay) {
+            const earliest = new Date(src.lastRepay.getTime() + SILENCE_HOURS * 3600 * 1000);
+            if (wDate < earliest) wDate = new Date(earliest);
+          }
         }
         wDate = fitToWindow(wDate);
         const wKey = src.card.id + '|' + fmtDate(wDate);
@@ -861,33 +939,39 @@
         totalCost += take * FEE_RATE;
         dailyCount[wKey] = cnt + 1;
 
-        const silenceH = src.lastRepay
-          ? Math.max(SILENCE_HOURS, Math.round((wDate - src.lastRepay) / 3600000))
-          : SILENCE_HOURS;
+        const tag = src.isSelf ? '自取现' : ('渠道' + channel + ' · 静置' + SILENCE_HOURS + 'h');
         withdrawals.push({
           date: wDate, action: 'withdraw', cardId: src.card.id,
           cardName: src.card.name, amount: take,
-          channel: '渠道' + channel + ' · 静置' + silenceH + 'h',
-          status: 'ok', note: '补足缺口'
+          channel: tag,
+          status: 'ok',
+          note: src.isSelf ? '自身可用额度补足缺口' : '补足缺口'
         });
       }
 
       withdrawals.forEach(w => schedule.push(w));
 
+      const payDate = new Date(task.date);
+      payDate.setHours(15, 0, 0, 0); // 统一 15:00 还款，排在同天取现（10:00）之后
       if (withdrawn >= shortfall) {
         cash += withdrawn - payAmount;
         cardAvailable[card.id] = card.totalLimit;
         cardLastRepay[card.id] = new Date(task.date);
+        const noteExtra = enableGrace && task.date <= new Date() ? ' · 宽限期内' : '';
         schedule.push({
-          date: new Date(task.date), action: 'pay', cardId: card.id,
+          date: payDate, action: 'pay', cardId: card.id,
           cardName: card.name, amount: payAmount, channel: '-',
-          status: 'ok', note: task.isFirst ? '首期账单 · 取现补足' : '取现补足 · 含磨损'
+          status: 'ok',
+          note: (task.isFirst ? '首期账单 · 取现补足' : '取现补足 · 含磨损') + noteExtra
         });
       } else {
+        const remaining = shortfall - withdrawn;
         schedule.push({
-          date: new Date(task.date), action: 'pay', cardId: card.id,
+          date: payDate, action: 'pay', cardId: card.id,
           cardName: card.name, amount: payAmount, channel: '-',
-          status: 'risk', note: '资金不足 · 需追加现金'
+          status: 'risk',
+          note: '资金不足 · 仍缺 ' + Math.round(remaining) + ' 元' +
+                (enableGrace ? '' : ' · 可开启宽限期再试')
         });
         riskCount++;
       }
@@ -1005,6 +1089,35 @@
     }
     summaryWrap.style.display = 'block';
     const { totalCost, totalWithdraw, savedByCash, finalCash, byMonth, schedule, riskCount } = state.plan;
+
+    // 宽限期引导提示
+    const graceHint = document.getElementById('graceHint');
+    if (graceHint) graceHint.remove(); // 先清除
+    if (riskCount > 0) {
+      const hint = document.createElement('div');
+      hint.id = 'graceHint';
+      hint.style.cssText = 'margin-bottom: 12px; background: var(--warn-soft); border: 1px solid #f0d48a; border-radius: var(--radius-lg); padding: 14px 16px; display: flex; align-items: center; gap: 12px;';
+      const savedCount = state.plan.hasGraceAlternative ? state.plan.graceSavedRisk : 0;
+      hint.innerHTML = `
+        <div style="flex:1;">
+          <div style="font-size: 14px; font-weight: 600; color: var(--warn); margin-bottom: 4px;">⚠ 资金缺口 ${riskCount} 笔，可能逾期！</div>
+          <div style="font-size: 12px; color: var(--text-2); line-height: 1.6;">
+            ${savedCount > 0 ? `开启银行 3 天宽限期可减少 <b>${savedCount}</b> 笔缺口。` : `当前资金链完全断裂，建议开启银行 3 天宽限期争取周转时间。`}
+            工行/招行/建行等多数银行默认自动给予 3 天容时，无需申请。
+          </div>
+        </div>
+        <button id="graceApplyBtn" style="flex-shrink:0; background: var(--warn); color:#fff; border:none; border-radius: var(--radius); padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;">一键开启</button>
+      `;
+      summaryWrap.insertBefore(hint, summaryWrap.firstChild);
+      document.getElementById('graceApplyBtn').addEventListener('click', () => {
+        state.enableGrace = true;
+        save();
+        document.getElementById('graceToggle').classList.add('checked');
+        state.plan = generatePlan(state.cards, state.cash, new Date(), true);
+        state.activeMonth = null;
+        renderPlan();
+      });
+    }
 
     // 汇总
     const coverCount = new Set(schedule.map(t => t.cardId)).size;
@@ -1299,11 +1412,30 @@
   });
   document.getElementById('generateBtn').addEventListener('click', () => {
     if (!state.cards.length) { alert('请先添加信用卡'); return; }
-    if (state.cash <= 0) { alert('请输入可用现金'); return; }
-    state.plan = generatePlan(state.cards, state.cash, new Date());
+    if (state.cash < 0) state.cash = 0;
+    state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace);
     state.activeMonth = null;
     renderPlan();
+    // 如果有风险且没开宽限期，自动尝试用宽限期再算一次，对比展示
+    if (state.plan.riskCount > 0 && !state.enableGrace) {
+      const gracePlan = generatePlan(state.cards, state.cash, new Date(), true);
+      state.plan.hasGraceAlternative = gracePlan.riskCount < state.plan.riskCount;
+      state.plan.graceSavedRisk = state.plan.riskCount - gracePlan.riskCount;
+      state.plan.graceAlternative = gracePlan;
+    }
     document.getElementById('summaryWrap').scrollIntoView({ behavior: 'smooth' });
+  });
+  // 宽限期开关
+  document.getElementById('graceToggle').addEventListener('click', () => {
+    state.enableGrace = !state.enableGrace;
+    save();
+    document.getElementById('graceToggle').classList.toggle('checked', state.enableGrace);
+    // 如果已有计划，重新生成
+    if (state.cards.length && state.cash > 0) {
+      state.plan = generatePlan(state.cards, state.cash, new Date(), state.enableGrace);
+      state.activeMonth = null;
+      renderPlan();
+    }
   });
   document.getElementById('exportCalBtn').addEventListener('click', downloadICS);
   document.getElementById('exportRemBtn').addEventListener('click', exportReminders);
@@ -1338,6 +1470,7 @@
   // ---------- 初始化 ----------
   load();
   document.getElementById('cashInput').value = state.cash || '';
+  document.getElementById('graceToggle').classList.toggle('checked', state.enableGrace);
   renderCards();
   renderStaggerHint();
   updateStaggerBtn();
