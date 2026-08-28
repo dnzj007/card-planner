@@ -738,7 +738,7 @@
   const STORAGE_KEY = 'cardPlanner.v2';
   const FEE_RATE = 0.00056;   // 0.056%
   const DAILY_LIMIT = 2;       // 单日单卡最多取现次数
-  const MONTHS_HORIZON = 3;    // 滚动 3 个月
+  const MONTHS_HORIZON = 6;    // 滚动 6 个月
 
   // ---------- 数据持久化 ----------
   const state = {
@@ -835,15 +835,25 @@
       initBill[c.id] = Math.max(0, fb);
     });
     cards.forEach(c => {
-      // 首个还款日：从今天之后第一个 dueDay；启用宽限期则顺延 GRACE_DAYS 天
-      let d = nextDueDate(today, c.dueDay);
-      if (enableGrace) d = new Date(d.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
+      // 修正：宽限期不能累积进 addMonths，每月独立计算 dueDay + 宽限
+      let year = today.getFullYear();
+      let month = today.getMonth();
+      // 找到起始月的 dueDay
+      let due = new Date(year, month, c.dueDay);
+      if (due < today) {
+        month++;
+        if (month > 11) { month = 0; year++; }
+        due = new Date(year, month, c.dueDay);
+      }
       let isFirst = true;
-      while (d <= horizon) {
+      while (due <= horizon) {
+        let actualDate = due;
+        if (enableGrace) actualDate = new Date(due.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
         const payAmount = isFirst ? initBill[c.id] : c.totalLimit;
-        tasks.push({ date: new Date(d), card: c, payAmount, isFirst });
-        d = addMonths(d, 1);
-        if (enableGrace) d = new Date(d.getTime() + GRACE_DAYS * 24 * 3600 * 1000);
+        tasks.push({ date: new Date(actualDate), card: c, payAmount, isFirst });
+        month++;
+        if (month > 11) { month = 0; year++; }
+        due = new Date(year, month, c.dueDay);
         isFirst = false;
       }
     });
